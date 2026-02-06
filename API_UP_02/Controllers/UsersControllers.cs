@@ -4,6 +4,9 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace API_UP_02.Controllers
 {
+    [ApiController]
+    [Route("api/v1/[controller]")]
+    [ApiExplorerSettings(GroupName = "v1")]
     public class UsersControllers: Controller
     {
         ///<summary>
