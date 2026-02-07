@@ -8,6 +8,7 @@ namespace API_UP_02.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [ApiExplorerSettings(GroupName = "v5")]
     public class ParsingBooksController : ControllerBase
     {
         /// <summary>
