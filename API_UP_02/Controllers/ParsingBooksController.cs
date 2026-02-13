@@ -14,14 +14,13 @@ namespace API_UP_02.Controllers
         /// <summary>
         /// Получить много книг с сайта Litmir
         /// </summary>
-        /// <param name="count">Сколько книг получить (максимум 100)</param>
+        /// <param name="count">Сколько книг получить 100 книг</param>
         /// <returns>Список книг</returns>
         [HttpGet("books/many")]
         public IActionResult GetManyBooks([FromQuery] int count = 50)
         {
             try
             {
-
                 var books = ParseManyBooksFromLitmir(count);
                 return Ok(books);
             }
@@ -58,6 +57,9 @@ namespace API_UP_02.Controllers
             }
         }
 
+        /// <summary>
+        /// Парсинг книг со всего сайта
+        /// </summary>
         private List<Book> ParseManyBooksFromLitmir(int targetCount)
         {
             var allBooks = new List<Book>();
@@ -74,9 +76,7 @@ namespace API_UP_02.Controllers
                     Console.WriteLine($"Парсим страницу {currentPage}...");
 
                     var pageUrl = currentPage == 1 ? baseUrl : $"{baseUrl}?page={currentPage}";
-
                     var doc = web.Load(pageUrl);
-
                     var bookRows = FindBookRows(doc);
 
                     if (bookRows == null || bookRows.Count == 0)
@@ -91,7 +91,6 @@ namespace API_UP_02.Controllers
                     allBooks.AddRange(pageBooks);
 
                     Console.WriteLine($"Всего собрано {allBooks.Count} из {targetCount} книг");
-
 
                     currentPage++;
 
@@ -112,6 +111,9 @@ namespace API_UP_02.Controllers
             }
         }
 
+        /// <summary>
+        /// Парсинг книг с нескольких страниц
+        /// </summary>
         private List<Book> ParseBooksFromMultiplePages(int pagesCount)
         {
             var allBooks = new List<Book>();
@@ -129,7 +131,6 @@ namespace API_UP_02.Controllers
                         $"https://litmir.club/knigi?page={pageNum}";
 
                     var doc = web.Load(pageUrl);
-
                     var bookRows = FindBookRows(doc);
 
                     if (bookRows == null || bookRows.Count == 0)
@@ -166,6 +167,9 @@ namespace API_UP_02.Controllers
             }
         }
 
+        /// <summary>
+        /// Поиск строк с книгами на странице
+        /// </summary>
         private HtmlNodeCollection FindBookRows(HtmlDocument doc)
         {
             var bookRows = doc.DocumentNode.SelectNodes("//table[@class='']//tr");
@@ -188,6 +192,9 @@ namespace API_UP_02.Controllers
             return bookRows;
         }
 
+        /// <summary>
+        /// Парсинг книг из найденных строк
+        /// </summary>
         private List<Book> ParseBooksFromRows(HtmlNodeCollection rows, int maxCount)
         {
             var books = new List<Book>();
@@ -210,80 +217,143 @@ namespace API_UP_02.Controllers
         }
 
         /// <summary>
-        /// Получить популярные книги по жанрам
+        /// Парсинг жанров из карточки книги 
         /// </summary>
-        /// <param name="genre">Жанр (фэнтези, детектив, роман)</param>
-        /// <param name="count">Количество книг</param>
-        /// <returns>Список книг</returns>
-        [HttpGet("books/genre")]
-        public IActionResult GetBooksByGenre([FromQuery] string genre = "фэнтези", [FromQuery] int count = 30)
+        private string ParseGenresFromBookCard(HtmlNode bookNode)
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(genre))
+                var genreSpan = bookNode.SelectSingleNode(".//span[@itemprop='genre']");
+
+                if (genreSpan == null)
                 {
-                    return BadRequest("Укажите жанр");
+                    return "Жанр не указан";
                 }
+                var genres = new List<string>();
 
-                if (count > 100) count = 100;
-
-                var books = ParseBooksByGenre(genre, count);
-                return Ok(books);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка: {ex.Message}");
-                return Ok(new List<Book>());
-            }
-        }
-
-        private List<Book> ParseBooksByGenre(string genre, int count)
-        {
-            var books = new List<Book>();
-            var web = new HtmlWeb();
-            web.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
-
-            try
-            {
-                var encodedGenre = Uri.EscapeDataString(genre.ToLower());
-                var genreUrl = $"https://litmir.club/knigi/zhanry/{encodedGenre}";
-
-                Console.WriteLine($"Ищем книги жанра '{genre}' по URL: {genreUrl}");
-
-                var doc = web.Load(genreUrl);
-
-                var bookRows = FindBookRows(doc);
-
-                if (bookRows == null || bookRows.Count == 0)
+                var genreLinks = genreSpan.SelectNodes(".//a[not(contains(@id, 'more'))]");
+                if (genreLinks != null)
                 {
-                    Console.WriteLine($"Книги жанра '{genre}' не найдены");
-                    return books;
-                }
-
-                Console.WriteLine($"Найдено {bookRows.Count} книг жанра '{genre}'");
-
-                int parsedCount = 0;
-                foreach (var row in bookRows)
-                {
-                    if (parsedCount >= count) break;
-
-                    var book = ParseBook(row);
-                    if (book != null && !string.IsNullOrEmpty(book.Title))
+                    foreach (var link in genreLinks)
                     {
-                        books.Add(book);
-                        parsedCount++;
+                        var genreText = link.InnerText.Trim();
+                        if (!string.IsNullOrEmpty(genreText) && genreText != "...")
+                        {
+                            genres.Add(genreText);
+                        }
                     }
                 }
 
-                return books;
+                var hiddenSpan = genreSpan.SelectSingleNode(".//span[contains(@id, 'genres_rest')]");
+                if (hiddenSpan != null)
+                {
+                    var hiddenLinks = hiddenSpan.SelectNodes(".//a");
+                    if (hiddenLinks != null)
+                    {
+                        foreach (var link in hiddenLinks)
+                        {
+                            var genreText = link.InnerText.Trim();
+                            if (!string.IsNullOrEmpty(genreText))
+                            {
+                                genres.Add(genreText);
+                            }
+                        }
+                    }
+                }
+
+                return genres.Count > 0 ? string.Join(", ", genres) : "Жанр не указан";
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Ошибка парсинга по жанру: {ex.Message}");
-                return new List<Book>();
+                Console.WriteLine($"Ошибка при парсинге жанров: {ex.Message}");
+                return "Ошибка парсинга жанров";
             }
         }
+        /// <summary>
+        /// Парсинг страницы одной книги
+        /// </summary>
+        private Book ParsePageBook(HtmlNode pageNode)
+        {
+            var book = new Book();
 
+            try
+            {
+                var titleNode = pageNode.SelectSingleNode(".//h1[@itemprop='name']");
+                if (titleNode != null)
+                {
+                    book.Title = WebUtility.HtmlDecode(titleNode.InnerText.Trim());
+                }
+
+                var authorNode = pageNode.SelectSingleNode(".//a[@itemprop='author']");
+                if (authorNode != null)
+                {
+                    book.Author = WebUtility.HtmlDecode(authorNode.InnerText.Trim());
+                }
+
+                var genreSpan = pageNode.SelectSingleNode(".//div[@class='page_text']//a");
+                if (genreSpan != null)
+                {
+                    book.Genre = WebUtility.HtmlDecode(genreSpan.InnerText.Trim());
+                }
+                else
+                {
+                    var genreNodes = pageNode.SelectNodes(".//span[@itemprop='genre']//a");
+                    if (genreNodes != null)
+                    {
+                        var genres = new List<string>();
+                        foreach (var genreNode in genreNodes)
+                        {
+                            string genre = genreNode.InnerText.Trim();
+                            if (!string.IsNullOrEmpty(genre) && genre != "...")
+                            {
+                                genres.Add(genre);
+                            }
+                        }
+                        book.Genre = string.Join(", ", genres);
+                    }
+                    else
+                    {
+                        book.Genre = "Жанр не указан";
+                    }
+                }
+
+                var descNode = pageNode.SelectSingleNode(".//div[@itemprop='description']");
+                if (descNode != null)
+                {
+                    book.Description = WebUtility.HtmlDecode(descNode.InnerText.Trim());
+                }
+
+                var imgNode = pageNode.SelectSingleNode(".//img[@itemprop='image']");
+                if (imgNode != null)
+                {
+                    string imgUrl = imgNode.GetAttributeValue("src", "");
+                    if (!string.IsNullOrEmpty(imgUrl))
+                    {
+                        if (imgUrl.StartsWith("//"))
+                        {
+                            imgUrl = "https:" + imgUrl;
+                        }
+                        else if (imgUrl.StartsWith("/"))
+                        {
+                            imgUrl = "https://litmir.club" + imgUrl;
+                        }
+                        book.ImageUrl = imgUrl;
+                    }
+                }
+                book.Language = "Русский";
+
+                Console.WriteLine($"Книга спарсена: {book.Title}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка при парсинге книги: {ex.Message}");
+            }
+
+            return book;
+        }
+        /// <summary>
+        /// Парсинг одной книги (С ЖАНРАМИ)
+        /// </summary>
         private Book ParseBook(HtmlNode row)
         {
             try
@@ -302,7 +372,7 @@ namespace API_UP_02.Controllers
 
                 if (titleNode == null)
                 {
-                    return null;
+                    return null; 
                 }
 
                 book.Title = WebUtility.HtmlDecode(titleNode.InnerText.Trim());
@@ -368,6 +438,8 @@ namespace API_UP_02.Controllers
                 {
                     book.Description = "Описание отсутствует";
                 }
+
+                book.Genre = ParseGenresFromBookCard(row);
 
                 book.Language = "Русский";
 
