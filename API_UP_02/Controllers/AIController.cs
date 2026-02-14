@@ -15,36 +15,6 @@ namespace API_UP_02.Controllers
         {
             gigaChatService = new GigaChatService();
         }
-
-        [HttpPost("recommend-book")]
-        public async Task<IActionResult> RecommendBook([FromForm] BookRequest request)
-        {
-            try
-            {
-                if (string.IsNullOrWhiteSpace(request?.Query))
-                    return BadRequest(new { error = "Запрос не может быть пустым", success = false });
-
-                if (!_sessions.ContainsKey(request.SessionId))
-                    _sessions[request.SessionId] = new List<Request.Message>();
-
-                var response = await gigaChatService.GetBookRecommendation(
-                    request.Query,
-                    _sessions[request.SessionId]
-                );
-
-                return Ok(new
-                {
-                    response = response,
-                    session_id = request.SessionId,
-                    success = true
-                });
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { error = ex.Message, success = false });
-            }
-        }
-
         [HttpPost("simple-ask")]
         public async Task<IActionResult> SimpleAsk([FromForm] string query)
         {
