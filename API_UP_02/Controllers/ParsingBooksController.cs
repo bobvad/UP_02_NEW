@@ -23,7 +23,8 @@ namespace API_UP_02.Controllers
             try
             {
                 var books = ParseBooksFromSinglePage();
-                return Ok(books);
+                var validBooks = books.Where(b => b.Id > 0).ToList();
+                return Ok(validBooks);
             }
             catch (Exception ex)
             {
@@ -41,7 +42,9 @@ namespace API_UP_02.Controllers
             try
             {
                 var books = ParseManyBooksFromLitmir(count);
-                return Ok(books);
+                // Фильтруем книги с ID > 0
+                var validBooks = books.Where(b => b.Id > 0).ToList();
+                return Ok(validBooks);
             }
             catch (Exception ex)
             {
@@ -59,7 +62,8 @@ namespace API_UP_02.Controllers
             try
             {
                 var books = ParseBooksFromMultiplePages(pages);
-                return Ok(books);
+                var validBooks = books.Where(b => b.Id > 0).ToList();
+                return Ok(validBooks);
             }
             catch (Exception ex)
             {
@@ -90,7 +94,7 @@ namespace API_UP_02.Controllers
         }
 
         /// <summary>
-        /// Получить полную информацию о книге
+        /// Получить полную информацию о книге 
         /// </summary>
         [HttpGet("book/full")]
         public IActionResult GetFullBookInfo([FromQuery] string bookUrl)
@@ -101,6 +105,12 @@ namespace API_UP_02.Controllers
                     return BadRequest("Не указан URL книги");
 
                 var book = ParseFullBookInfo(bookUrl);
+
+                if (book.Id == 0)
+                {
+                    return BadRequest("Не удалось получить корректный ID книги");
+                }
+
                 return Ok(book);
             }
             catch (Exception ex)
@@ -111,13 +121,16 @@ namespace API_UP_02.Controllers
         }
 
         /// <summary>
-        /// Получить текст книги по ID
+        /// Получить текст книги по ID 
         /// </summary>
         [HttpGet("book/{bookId}/content")]
         public IActionResult GetBookContentById(int bookId)
         {
             try
             {
+                if (bookId <= 0)
+                    return BadRequest("Некорректный ID книги");
+
                 var bookUrl = $"{BaseUrl}/br/?b={bookId}";
                 var content = ParseBookContent(bookUrl);
                 return Ok(new { BookId = bookId, Content = content });
@@ -130,13 +143,16 @@ namespace API_UP_02.Controllers
         }
 
         /// <summary>
-        /// Читать книгу постранично
+        /// Читать книгу постранично 
         /// </summary>
         [HttpGet("book/{bookId}/read")]
         public IActionResult ReadBook(int bookId, [FromQuery] int? page = null)
         {
             try
             {
+                if (bookId <= 0)
+                    return BadRequest("Некорректный ID книги");
+
                 var bookUrl = page.HasValue
                     ? $"{BaseUrl}/br/?b={bookId}&p={page.Value}"
                     : $"{BaseUrl}/br/?b={bookId}";
@@ -159,6 +175,51 @@ namespace API_UP_02.Controllers
             }
         }
 
+        /// <summary>
+        /// Получить книги по жанру 
+        /// </summary>
+        [HttpGet("books/genre/{genre}")]
+        public IActionResult GetBooksByGenre(string genre, [FromQuery] int count = 20)
+        {
+            try
+            {
+                var allBooks = ParseManyBooksFromLitmir(count * 2); 
+                var booksByGenre = allBooks
+                    .Where(b => b.Id > 0 && b.Genre != null && b.Genre.Contains(genre, StringComparison.OrdinalIgnoreCase))
+                    .Take(count)
+                    .ToList();
+
+                return Ok(booksByGenre);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка: {ex.Message}");
+                return Ok(new List<Book>());
+            }
+        }
+
+        /// <summary>
+        /// Получить книги по автору 
+        /// </summary>
+        [HttpGet("books/author/{author}")]
+        public IActionResult GetBooksByAuthor(string author, [FromQuery] int count = 20)
+        {
+            try
+            {
+                var allBooks = ParseManyBooksFromLitmir(count * 2); // Парсим с запасом
+                var booksByAuthor = allBooks
+                    .Where(b => b.Id > 0 && b.Author != null && b.Author.Contains(author, StringComparison.OrdinalIgnoreCase))
+                    .Take(count)
+                    .ToList();
+
+                return Ok(booksByAuthor);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка: {ex.Message}");
+                return Ok(new List<Book>());
+            }
+        }
 
         private List<Book> ParseBooksFromSinglePage()
         {
@@ -179,13 +240,13 @@ namespace API_UP_02.Controllers
                 foreach (var block in bookBlocks)
                 {
                     var book = ParseBook(block);
-                    if (book != null && !string.IsNullOrEmpty(book.Title))
+                    if (book != null && !string.IsNullOrEmpty(book.Title) && book.Id > 0)
                     {
                         books.Add(book);
                     }
                 }
 
-                Console.WriteLine($"Спарсено {books.Count} книг");
+                Console.WriteLine($"Спарсено {books.Count} книг с корректным ID");
                 return books;
             }
             catch (Exception ex)
@@ -216,7 +277,7 @@ namespace API_UP_02.Controllers
                         break;
 
                     var book = ParseBook(row);
-                    if (book != null && !string.IsNullOrEmpty(book.Title))
+                    if (book != null && !string.IsNullOrEmpty(book.Title) && book.Id > 0)
                     {
                         allBooks.Add(book);
                     }
@@ -245,7 +306,7 @@ namespace API_UP_02.Controllers
                 foreach (var row in bookRows)
                 {
                     var book = ParseBook(row);
-                    if (book != null && !string.IsNullOrEmpty(book.Title))
+                    if (book != null && !string.IsNullOrEmpty(book.Title) && book.Id > 0)
                     {
                         allBooks.Add(book);
                     }
@@ -270,6 +331,9 @@ namespace API_UP_02.Controllers
                 book.BookUrl = BuildFullUrl(href);
 
                 book.Id = ExtractBookId(book.BookUrl);
+
+                if (book.Id == 0) return null;
+
                 if (book.Id > 0)
                 {
                     book.ReadUrl = $"{BaseUrl}/br/?b={book.Id}";
@@ -479,6 +543,8 @@ namespace API_UP_02.Controllers
             try
             {
                 var bookId = ExtractBookId(bookUrl);
+                if (bookId == 0) return new Book { Id = 0, Title = "Ошибка", Description = "Не удалось извлечь ID книги" };
+
                 var doc = web.Load(bookUrl);
 
                 var book = new Book
@@ -534,7 +600,7 @@ namespace API_UP_02.Controllers
             }
             catch (Exception ex)
             {
-                return new Book { Title = "Ошибка", Description = ex.Message, BookUrl = bookUrl };
+                return new Book { Id = 0, Title = "Ошибка", Description = ex.Message, BookUrl = bookUrl };
             }
         }
 
@@ -651,6 +717,5 @@ namespace API_UP_02.Controllers
 
             return html.Trim();
         }
-
     }
 }
