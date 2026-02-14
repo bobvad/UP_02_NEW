@@ -22,28 +22,14 @@ builder.Services.AddSwaggerGen(options =>
     {
         Version = "v2",
         Title = "API v2",
-        Description = "Вторая версия API"
+        Description = "Версия API предназначенная для нейросети"
     });
 
     options.SwaggerDoc("v3", new OpenApiInfo
     {
         Version = "v3",
         Title = "API v3",
-        Description = "Третья версия API"
-    });
-
-    options.SwaggerDoc("v4", new OpenApiInfo
-    {
-        Version = "v4",
-        Title = "API v4",
-        Description = "Четвертая версия API"
-    });
-
-    options.SwaggerDoc("v5", new OpenApiInfo
-    {
-        Version = "v5",
-        Title = "Парсинг данных",
-        Description = "Пятая версия API предназначенная для парсинга данных с сайта для книг"
+        Description = "Версия API предназначенная для парсинга данных с сайта для книг"
     });
 
     var xmlFilename = $"API_UP_02.xml";
@@ -60,9 +46,7 @@ if (app.Environment.IsDevelopment())
     {
         options.SwaggerEndpoint("/swagger/v1/swagger.json", "API v1");
         options.SwaggerEndpoint("/swagger/v2/swagger.json", "API v2");
-        options.SwaggerEndpoint("/swagger/v3/swagger.json", "API v3");
-        options.SwaggerEndpoint("/swagger/v4/swagger.json", "API v4");
-        options.SwaggerEndpoint("/swagger/v5/swagger.json", "API for parsing website LitMir Club v5");
+        options.SwaggerEndpoint("/swagger/v3/swagger.json", "API for parsing website LitMir Club v3");
     });
 }
 else

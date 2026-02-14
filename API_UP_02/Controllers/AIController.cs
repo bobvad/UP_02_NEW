@@ -6,6 +6,7 @@ namespace API_UP_02.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [ApiExplorerSettings(GroupName = "v2")]
     public class AIController : ControllerBase
     {
         private readonly GigaChatService gigaChatService;
