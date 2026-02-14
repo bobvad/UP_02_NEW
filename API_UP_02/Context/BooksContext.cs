@@ -1,4 +1,5 @@
-﻿using API_UP_02.Models;
+﻿using API_UP_02.Controllers;
+using API_UP_02.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace API_UP_02.Context
@@ -7,6 +8,7 @@ namespace API_UP_02.Context
     {
         public DbSet<Users> Users { get; set; }
         public DbSet<Book> Books { get; set; }
+        public DbSet<Isbrannoe> isbrannoes { get; set; }
         public BooksContext()
         {
             Database.EnsureCreated();
