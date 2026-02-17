@@ -1,6 +1,7 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using API_UP_02.Services;
+﻿// Controllers/AIController.cs
 using API_UP_02.GigaChat_LLM.For_GigaChat.Models;
+using API_UP_02.Services;
+using Microsoft.AspNetCore.Mvc;
 
 namespace API_UP_02.Controllers
 {
@@ -9,13 +10,14 @@ namespace API_UP_02.Controllers
     [ApiExplorerSettings(GroupName = "v2")]
     public class AIController : ControllerBase
     {
-        private readonly GigaChatService gigaChatService;
+        private readonly GigaChatService _gigaChatService; 
         private static Dictionary<string, List<Request.Message>> _sessions = new();
 
-        public AIController()
+        public AIController(GigaChatService gigaChatService) 
         {
-            gigaChatService = new GigaChatService();
+            _gigaChatService = gigaChatService; 
         }
+
         [HttpPost("simple-ask")]
         public async Task<IActionResult> SimpleAsk([FromForm] string query)
         {
@@ -24,7 +26,7 @@ namespace API_UP_02.Controllers
                 if (string.IsNullOrWhiteSpace(query))
                     return BadRequest(new { error = "Запрос пустой", success = false });
 
-                var response = await gigaChatService.GetBookRecommendation(query);
+                var response = await _gigaChatService.GetBookRecommendation(query);
 
                 return Ok(new { response = response, success = true });
             }
@@ -34,11 +36,5 @@ namespace API_UP_02.Controllers
             }
         }
 
-    }
-
-    public class BookRequest
-    {
-        public string Query { get; set; }
-        public string SessionId { get; set; } = Guid.NewGuid().ToString();
     }
 }

@@ -1,14 +1,12 @@
 using Microsoft.OpenApi.Models;
-using API_UP_02.Context; 
-
+using API_UP_02.Context;
+using API_UP_02.Services; 
 var builder = WebApplication.CreateBuilder(args);
-
-// Add services to the container.
 builder.Services.AddRazorPages();
-
 builder.Services.AddControllers();
-
 builder.Services.AddDbContext<BooksContext>();
+builder.Services.AddScoped<GigaChatService>();
+builder.Services.AddHttpClient();
 
 builder.Services.AddSwaggerGen(options =>
 {
