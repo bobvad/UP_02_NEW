@@ -10,12 +10,12 @@ namespace API_UP_02.Controllers
     [ApiExplorerSettings(GroupName = "v2")]
     public class AIController : ControllerBase
     {
-        private readonly GigaChatService _gigaChatService; 
+        private readonly GigaChatService _gigaChatService;
         private static Dictionary<string, List<Request.Message>> _sessions = new();
 
-        public AIController(GigaChatService gigaChatService) 
+        public AIController(GigaChatService gigaChatService)
         {
-            _gigaChatService = gigaChatService; 
+            _gigaChatService = gigaChatService;
         }
 
         [HttpPost("simple-ask")]
@@ -36,5 +36,48 @@ namespace API_UP_02.Controllers
             }
         }
 
+        [HttpGet("personal/{userId}")]
+        public async Task<IActionResult> GetPersonalRecommendation(int userId)
+        {
+            try
+            {
+                var recommendation = await _gigaChatService.GetPersonalizedRecommendation(userId);
+                return Ok(new { recommendation = recommendation, success = true });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = ex.Message, success = false });
+            }
+        }
+
+        [HttpGet("auto/{userId}")]
+        public async Task<IActionResult> GetAutoRecommendation(int userId)
+        {
+            try
+            {
+                var recommendation = await _gigaChatService.GetAutoRecommendation(userId);
+
+                if (recommendation == null)
+                {
+                    return Ok(new
+                    {
+                        message = "Новых рекомендаций пока нет",
+                        show = false,
+                        success = true
+                    });
+                }
+
+                return Ok(new
+                {
+                    recommendation = recommendation,
+                    show = true,
+                    success = true
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = ex.Message, success = false });
+            }
+        }
     }
 }

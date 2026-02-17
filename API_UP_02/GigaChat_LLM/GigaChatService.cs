@@ -4,8 +4,8 @@ using API_UP_02.GigaChat_LLM.For_GigaChat.Models;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
 using System.Text;
-using API_UP_02.GigaChat_LLM.Model_GigaChat;
 using API_UP_02.Context;
+using API_UP_02.GigaChat_LLM.Model_GigaChat;
 
 namespace API_UP_02.Services
 {
@@ -19,7 +19,7 @@ namespace API_UP_02.Services
         private readonly BooksContext _context;
         private readonly ILogger<GigaChatService> _logger;
 
-        private const string SystemPrompt = @"Ты - книжный рекомендательный сервис, специализирующийся на книгах . 
+        private const string SystemPrompt = @"Ты - книжный рекомендательный сервис.
 
 Твоя задача - рекомендовать книги пользователям на основе их запросов и предпочтений.
 
@@ -29,15 +29,14 @@ namespace API_UP_02.Services
 1. Название книги
 2. Автора
 3. Краткое описание (2-3 предложения)
-5. Почему эта книга подходит под запрос пользователя
+4. Почему эта книга подходит под запрос пользователя
 
 Формат ответа:
- По вашему запросу я рекомендую:
+📌 По вашему запросу я рекомендую:
 
- [Название книги] - [Автор]
- [Описание]
- [Ссылка]
- [Почему подходит]
+📖 [Название книги] - [Автор]
+📝 [Описание]
+✨ [Почему подходит]
 
 Старайся давать 2-3 рекомендации на каждый запрос. Будь дружелюбным и используй эмодзи.";
 
@@ -47,6 +46,7 @@ namespace API_UP_02.Services
             _logger = logger;
         }
 
+        // Поиск по запросу
         public async Task<string> GetBookRecommendation(string userRequest, List<Request.Message> conversationHistory = null)
         {
             try
@@ -85,6 +85,9 @@ namespace API_UP_02.Services
                         content = assistantResponse
                     });
 
+                    // Сохраняем в лог
+                    await SaveLogAsync(0, "search", userRequest, assistantResponse);
+
                     return assistantResponse;
                 }
 
@@ -96,6 +99,8 @@ namespace API_UP_02.Services
                 return $"Произошла ошибка: {ex.Message}. Пожалуйста, попробуйте позже.";
             }
         }
+
+        // Персональные рекомендации
         public async Task<string> GetPersonalizedRecommendation(int userId)
         {
             try
@@ -105,7 +110,6 @@ namespace API_UP_02.Services
                 await EnsureTokenAsync();
 
                 var userContext = await GetUserReadingContext(userId);
-
                 var prompt = BuildPersonalizedPrompt(userContext);
 
                 var messages = new List<Request.Message>
@@ -115,9 +119,13 @@ namespace API_UP_02.Services
                 };
 
                 var response = await GetAnswer(Token, messages);
-
-                return response?.choices?.FirstOrDefault()?.message?.content
+                var recommendation = response?.choices?.FirstOrDefault()?.message?.content
                        ?? "Не удалось подобрать персональные рекомендации";
+
+                // Сохраняем в лог
+                await SaveLogAsync(userId, "personal_recommendation", prompt, recommendation);
+
+                return recommendation;
             }
             catch (Exception ex)
             {
@@ -126,6 +134,80 @@ namespace API_UP_02.Services
             }
         }
 
+        // АВТОМАТИЧЕСКИЕ РЕКОМЕНДАЦИИ (раз в неделю)
+        public async Task<string> GetAutoRecommendation(int userId)
+        {
+            try
+            {
+                // Проверяем, есть ли пользователь
+                var user = await _context.Users.FindAsync(userId);
+                if (user == null)
+                    return "Пользователь не найден";
+
+                // Проверяем, давно ли пользователь получал рекомендации
+                var lastRec = await _context.UserLogs
+                    .Where(x => x.UserId == userId && x.Action == "personal_recommendation")
+                    .OrderByDescending(x => x.CreatedAt)
+                    .FirstOrDefaultAsync();
+
+                // Если прошло больше 7 дней или это первый раз
+                if (lastRec == null || lastRec.CreatedAt < DateTime.Now.AddDays(-7))
+                {
+                    _logger.LogInformation($"Генерируем автоматическую рекомендацию для пользователя {userId}");
+
+                    var recommendation = await GetPersonalizedRecommendation(userId);
+
+                    // Здесь можно добавить отправку email или уведомления
+                    await SendNotification(userId, recommendation);
+
+                    return recommendation;
+                }
+
+                _logger.LogInformation($"Пользователь {userId} уже получал рекомендацию {lastRec.CreatedAt}");
+                return null; // Рекомендация не нужна
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Ошибка авторекомендации для {userId}");
+                return null;
+            }
+        }
+
+        // Отправка уведомления (заглушка)
+        private async Task SendNotification(int userId, string recommendation)
+        {
+            // Здесь можно добавить отправку email, push-уведомления и т.д.
+            _logger.LogInformation($"Уведомление для пользователя {userId} отправлено");
+
+            // Сохраняем в отдельную таблицу уведомлений (если нужно)
+            // await _context.Notifications.AddAsync(new Notification { UserId = userId, Text = recommendation });
+            // await _context.SaveChangesAsync();
+        }
+
+        // Сохранение лога
+        private async Task SaveLogAsync(int userId, string action, string request, string response)
+        {
+            try
+            {
+                var log = new UserLog
+                {
+                    UserId = userId,
+                    Action = action,
+                    Request = request?.Length > 200 ? request.Substring(0, 200) : request,
+                    Response = response?.Length > 500 ? response.Substring(0, 500) : response,
+                    CreatedAt = DateTime.Now
+                };
+
+                await _context.UserLogs.AddAsync(log);
+                await _context.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка сохранения лога");
+            }
+        }
+
+        // Получение контекста пользователя
         private async Task<UserReadingContext> GetUserReadingContext(int userId)
         {
             var context = new UserReadingContext();
@@ -177,6 +259,7 @@ namespace API_UP_02.Services
             return context;
         }
 
+        // Формирование промпта
         private string BuildPersonalizedPrompt(UserReadingContext context)
         {
             var sb = new StringBuilder();
@@ -221,7 +304,7 @@ namespace API_UP_02.Services
             }
 
             sb.AppendLine("\nПосоветуй 3 книги, которые мне должны понравиться, с учетом моих предпочтений.");
-            sb.AppendLine("Обязательно указывай ссылки на поиск на Litmir!");
+            sb.AppendLine("Напиши названия, авторов и почему они мне понравятся.");
 
             return sb.ToString();
         }
@@ -253,9 +336,9 @@ namespace API_UP_02.Services
                     if (Response.IsSuccessStatusCode)
                     {
                         string ResponseContent = await Response.Content.ReadAsStringAsync();
-                        ResponseToken Token = JsonConvert.DeserializeObject<ResponseToken>(ResponseContent);
+                        var token = JsonConvert.DeserializeObject<ResponseToken>(ResponseContent);
                         _logger.LogInformation("Токен успешно получен");
-                        return Token.access_token;
+                        return token?.access_token;
                     }
                     else
                     {
@@ -327,6 +410,7 @@ namespace API_UP_02.Services
             }
         }
     }
+
     public class UserReadingContext
     {
         public List<BookInfo> WantToRead { get; set; } = new();
