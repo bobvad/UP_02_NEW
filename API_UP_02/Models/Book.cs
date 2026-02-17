@@ -12,6 +12,7 @@
         public string Language { get; set; }
         public int? PageCount { get; set; }
         public bool IsCompleted { get; set; }
+        public string Source { get; set; }
 
         /// <summary>
         /// URL страницы книги на сайте

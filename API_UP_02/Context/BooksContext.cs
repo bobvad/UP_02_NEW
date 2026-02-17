@@ -8,7 +8,7 @@ namespace API_UP_02.Context
     {
         public DbSet<Users> Users { get; set; }
         public DbSet<Book> Books { get; set; }
-        public DbSet<Favorites> isbrannoes { get; set; }
+        public DbSet<Favorites> Favorites { get; set; }
         public BooksContext()
         {
             Database.EnsureCreated();

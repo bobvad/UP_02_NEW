@@ -1,4 +1,5 @@
 ﻿using API_UP_02.Models;
+using API_UP_02.Context;
 using HtmlAgilityPack;
 using Microsoft.AspNetCore.Mvc;
 using System.Net;
@@ -14,8 +15,15 @@ namespace API_UP_02.Controllers
         private const string BaseUrl = "https://litmir.club";
         private const string UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 
+        private readonly BooksContext _context;
+
+        public ParsingBooksController(BooksContext context)
+        {
+            _context = context;
+        }
+
         /// <summary>
-        /// Получить книги с одной страницы
+        /// Получить книги с одной страницы и сохранить в БД
         /// </summary>
         [HttpGet("books/single-page")]
         public IActionResult GetBooksFromSinglePage()
@@ -24,6 +32,9 @@ namespace API_UP_02.Controllers
             {
                 var books = ParseBooksFromSinglePage();
                 var validBooks = books.Where(b => b.Id > 0).ToList();
+
+                SaveBooksToDatabase(validBooks);
+
                 return Ok(validBooks);
             }
             catch (Exception ex)
@@ -34,16 +45,18 @@ namespace API_UP_02.Controllers
         }
 
         /// <summary>
-        /// Получить много книг с сайта
+        /// Получить много книг с сайта и сохранить в БД
         /// </summary>
         [HttpGet("books/many")]
-        public IActionResult GetManyBooks([FromQuery] int count = 50)
+        public IActionResult GetManyBooks([FromQuery] int count = 200)
         {
             try
             {
                 var books = ParseManyBooksFromLitmir(count);
-                // Фильтруем книги с ID > 0
                 var validBooks = books.Where(b => b.Id > 0).ToList();
+
+                SaveBooksToDatabase(validBooks);
+
                 return Ok(validBooks);
             }
             catch (Exception ex)
@@ -54,15 +67,18 @@ namespace API_UP_02.Controllers
         }
 
         /// <summary>
-        /// Получить книги с нескольких страниц
+        /// Получить книги с нескольких страниц и сохранить в БД
         /// </summary>
         [HttpGet("books/pages")]
-        public IActionResult GetBooksFromPages([FromQuery] int pages = 3)
+        public IActionResult GetBooksFromPages([FromQuery] int pages = 5)
         {
             try
             {
                 var books = ParseBooksFromMultiplePages(pages);
                 var validBooks = books.Where(b => b.Id > 0).ToList();
+
+                SaveBooksToDatabase(validBooks);
+
                 return Ok(validBooks);
             }
             catch (Exception ex)
@@ -183,7 +199,17 @@ namespace API_UP_02.Controllers
         {
             try
             {
-                var allBooks = ParseManyBooksFromLitmir(count * 2); 
+                var booksFromDb = _context.Books
+                    .Where(b => b.Genre != null && b.Genre.Contains(genre))
+                    .Take(count)
+                    .ToList();
+
+                if (booksFromDb.Count > 0)
+                {
+                    return Ok(booksFromDb);
+                }
+
+                var allBooks = ParseManyBooksFromLitmir(count * 2);
                 var booksByGenre = allBooks
                     .Where(b => b.Id > 0 && b.Genre != null && b.Genre.Contains(genre, StringComparison.OrdinalIgnoreCase))
                     .Take(count)
@@ -206,7 +232,17 @@ namespace API_UP_02.Controllers
         {
             try
             {
-                var allBooks = ParseManyBooksFromLitmir(count * 2); // Парсим с запасом
+                var booksFromDb = _context.Books
+                    .Where(b => b.Author != null && b.Author.Contains(author))
+                    .Take(count)
+                    .ToList();
+
+                if (booksFromDb.Count > 0)
+                {
+                    return Ok(booksFromDb);
+                }
+
+                var allBooks = ParseManyBooksFromLitmir(count * 2);
                 var booksByAuthor = allBooks
                     .Where(b => b.Id > 0 && b.Author != null && b.Author.Contains(author, StringComparison.OrdinalIgnoreCase))
                     .Take(count)
@@ -219,6 +255,93 @@ namespace API_UP_02.Controllers
                 Console.WriteLine($"Ошибка: {ex.Message}");
                 return Ok(new List<Book>());
             }
+        }
+
+        private void SaveBooksToDatabase(List<Book> books)
+        {
+            int addedCount = 0;
+            int skippedCount = 0;
+            int errorCount = 0;
+
+            var processedIds = new List<int>();
+
+            foreach (var book in books)
+            {
+                if (processedIds.Contains(book.Id))
+                {
+                    skippedCount++;
+                    continue;
+                }
+
+                try
+                {
+                    var existingBook = _context.Books.FirstOrDefault(b => b.Id == book.Id);
+
+                    if (existingBook == null)
+                    {
+                        book.Title = TruncateString(book.Title, 255);
+                        book.Author = TruncateString(book.Author, 100);
+                        book.Genre = TruncateString(book.Genre, 200);
+                        book.Description = TruncateString(book.Description, 2000);
+                        book.ImageUrl = TruncateString(book.ImageUrl, 500);
+                        book.BookUrl = TruncateString(book.BookUrl, 500);
+                        book.ReadUrl = TruncateString(book.ReadUrl, 500);
+                        book.DownloadUrl = TruncateString(book.DownloadUrl, 500);
+                        book.Language = TruncateString(book.Language, 50);
+                        book.Content = TruncateString(book.Content, 5000);
+
+                        if (string.IsNullOrEmpty(book.Title))
+                            book.Title = "Без названия";
+                        if (string.IsNullOrEmpty(book.Author))
+                            book.Author = "Неизвестен";
+                        if (string.IsNullOrEmpty(book.Genre))
+                            book.Genre = "Не указан";
+                        if (string.IsNullOrEmpty(book.Description))
+                            book.Description = "Описание отсутствует";
+                        if (string.IsNullOrEmpty(book.Language))
+                            book.Language = "Русский";
+
+                        _context.Books.Add(book);
+                        processedIds.Add(book.Id);
+                        addedCount++;
+                    }
+                    else
+                    {
+                        skippedCount++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    errorCount++;
+                    Console.WriteLine($"Ошибка при сохранении книги {book.Id}: {ex.Message}");
+                    if (ex.InnerException != null)
+                    {
+                        Console.WriteLine($"Внутренняя ошибка: {ex.InnerException.Message}");
+                    }
+                }
+            }
+
+            try
+            {
+                _context.SaveChanges();
+                Console.WriteLine($"Добавлено: {addedCount}, Пропущено: {skippedCount}, Ошибок: {errorCount}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка SaveChanges: {ex.Message}");
+                if (ex.InnerException != null)
+                {
+                    Console.WriteLine($"Внутренняя ошибка: {ex.InnerException.Message}");
+                }
+            }
+        }
+
+        private string TruncateString(string value, int maxLength)
+        {
+            if (string.IsNullOrEmpty(value))
+                return string.Empty;
+
+            return value.Length > maxLength ? value.Substring(0, maxLength) : value;
         }
 
         private List<Book> ParseBooksFromSinglePage()
@@ -341,13 +464,9 @@ namespace API_UP_02.Controllers
                 }
 
                 book.Author = ParseAuthor(row);
-
                 book.ImageUrl = ParseImageUrl(row);
-
                 book.Description = ParseDescription(row);
-
                 book.Genre = ParseGenres(row);
-
                 book.Language = "Русский";
                 book.PageCount = ParsePageCount(row);
                 book.IsCompleted = CheckIsCompleted(row);

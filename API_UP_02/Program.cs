@@ -1,6 +1,5 @@
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.OpenApi.Models;
-using System.Reflection;
+using API_UP_02.Context; 
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,6 +7,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorPages();
 
 builder.Services.AddControllers();
+
+builder.Services.AddDbContext<BooksContext>();
 
 builder.Services.AddSwaggerGen(options =>
 {
@@ -46,7 +47,7 @@ if (app.Environment.IsDevelopment())
     {
         options.SwaggerEndpoint("/swagger/v1/swagger.json", "API v1");
         options.SwaggerEndpoint("/swagger/v2/swagger.json", "API v2");
-        options.SwaggerEndpoint("/swagger/v3/swagger.json", "API for parsing website LitMir Club v3");
+        options.SwaggerEndpoint("/swagger/v3/swagger.json", "API for parsing website v3");
     });
 }
 else
@@ -63,6 +64,6 @@ app.UseRouting();
 app.UseAuthorization();
 
 app.MapRazorPages();
-app.MapControllers(); 
+app.MapControllers();
 
 app.Run();
