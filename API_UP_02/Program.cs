@@ -44,7 +44,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(options =>
     {
         options.SwaggerEndpoint("/swagger/v1/swagger.json", "API v1");
-        options.SwaggerEndpoint("/swagger/v2/swagger.json", "API v2");
+        options.SwaggerEndpoint("/swagger/v2/swagger.json", "API GigaChat_LLM_AI v2");
         options.SwaggerEndpoint("/swagger/v3/swagger.json", "API for parsing website v3");
     });
 }

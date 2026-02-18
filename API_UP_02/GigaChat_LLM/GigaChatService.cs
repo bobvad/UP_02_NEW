@@ -1,6 +1,7 @@
 ﻿using API_UP_02.Context;
 using API_UP_02.GigaChat_LLM.For_GigaChat.Models;
 using API_UP_02.GigaChat_LLM.Model_GigaChat;
+using API_UP_02.Models;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
 using System.Text;
@@ -13,6 +14,9 @@ namespace API_UP_02.Services
         private static string AuthorizationKey = "MDE5OWQ0NzAtYmI5My03Y2UyLWIwZGYtNjIwZWFkMjczOTVkOjQwNjdkNDdhLWY1MTYtNGZiYS05ZGM5LTg0MDAwNDExNTUwNQ==";
         private static string Token = null;
         private static DateTime TokenExpirationTime;
+
+        // Добавляем поле для хранения времени последних рекомендаций
+        private static Dictionary<int, DateTime> _lastRecommendations = new Dictionary<int, DateTime>();
 
         private readonly BooksContext _context;
         private readonly ILogger<GigaChatService> _logger;
@@ -43,6 +47,8 @@ namespace API_UP_02.Services
             _context = context;
             _logger = logger;
         }
+
+        #region Основные методы API
 
         /// <summary>
         /// Получение рекомендаций по поисковому запросу
@@ -127,6 +133,117 @@ namespace API_UP_02.Services
                 return "Что-то пошло не так. Попробуйте позже.";
             }
         }
+
+        /// <summary>
+        /// Автоматическая рекомендация при входе в приложение
+        /// </summary>
+        public async Task<AutoRecommendation> GetAutoRecommendation(int userId)
+        {
+            try
+            {
+                _logger.LogInformation($"Автоматическая рекомендация для пользователя {userId}");
+
+                await EnsureTokenAsync();
+
+                // Проверяем, есть ли у пользователя книги в прогрессе или избранном
+                var hasBooks = await _context.ReadingProgress
+                    .AnyAsync(rp => rp.UserId == userId);
+
+                var hasFavorites = await _context.Favorites
+                    .AnyAsync(f => f.UserId == userId);
+
+                // Если у пользователя нет книг, даем общие рекомендации
+                if (!hasBooks && !hasFavorites)
+                {
+                    var newUserPrompt = @"Пользователь только начал пользоваться приложением и у него еще нет книг.
+
+Порекомендуй 3 популярные книги разных жанров, которые могли бы заинтересовать нового читателя:
+
+1. Классическую книгу, которую стоит прочитать каждому
+2. Современный бестселлер
+3. Книгу в жанре, который обычно нравится большинству читателей
+
+Для каждой книги укажи:
+- Название
+- Автора
+- Краткое описание
+- Почему именно эта книга подойдет для начала";
+
+                    var newUserMessages = new List<Request.Message>
+                    {
+                        new Request.Message { role = "system", content = SystemPrompt },
+                        new Request.Message { role = "user", content = newUserPrompt }
+                    };
+
+                    var response = await GetAnswer(Token, newUserMessages);
+
+                    if (response?.choices != null && response.choices.Count > 0)
+                    {
+                        return new AutoRecommendation
+                        {
+                            Title = "Добро пожаловать в мир книг!",
+                            Description = response.choices[0].message.content,
+                            Type = "welcome",
+                            ShowOnLogin = true
+                        };
+                    }
+                }
+
+                // Проверяем, когда в последний раз пользователь получал рекомендацию (не чаще 1 раза в 24 часа)
+                if (_lastRecommendations.ContainsKey(userId) &&
+                    _lastRecommendations[userId] > DateTime.UtcNow.AddHours(-24))
+                {
+                    _logger.LogInformation($"Пользователь {userId} уже получал рекомендацию менее 24 часов назад");
+                    return null; // Новых рекомендаций пока нет
+                }
+
+                // Собираем данные о предпочтениях пользователя
+                var userPreferences = await GetUserPreferences(userId);
+
+                // Формируем промпт для автоподбора
+                var autoPrompt = BuildAutoRecommendationPrompt(userPreferences);
+
+                var autoMessages = new List<Request.Message>
+                {
+                    new Request.Message { role = "system", content = SystemPrompt },
+                    new Request.Message { role = "user", content = autoPrompt }
+                };
+
+                var autoResponse = await GetAnswer(Token, autoMessages);
+
+                if (autoResponse?.choices != null && autoResponse.choices.Count > 0)
+                {
+                    var recommendation = autoResponse.choices[0].message.content;
+
+                    // Сохраняем время выдачи рекомендации
+                    _lastRecommendations[userId] = DateTime.UtcNow;
+
+                    _logger.LogInformation($"Выдана авторекомендация пользователю {userId}");
+
+                    // Определяем заголовок в зависимости от активности
+                    string title = GetRecommendationTitle(userPreferences);
+
+                    return new AutoRecommendation
+                    {
+                        Title = title,
+                        Description = recommendation,
+                        Type = "personalized",
+                        ShowOnLogin = true
+                    };
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Ошибка при авторекомендации для {userId}");
+                return null;
+            }
+        }
+
+        #endregion
+
+        #region Работа с токеном
 
         /// <summary>
         /// Получение и обновление токена GigaChat
@@ -225,8 +342,6 @@ namespace API_UP_02.Services
             }
         }
 
-        #region Вспомогательные методы
-
         private async Task EnsureTokenAsync()
         {
             if (Token == null || TokenExpirationTime <= DateTime.UtcNow)
@@ -236,6 +351,9 @@ namespace API_UP_02.Services
                 _logger.LogInformation("Токен обновлен");
             }
         }
+
+        #endregion
+
 
         private async Task<string> BuildPersonalizedPrompt(int userId)
         {
@@ -311,6 +429,186 @@ namespace API_UP_02.Services
 
             return sb.ToString();
         }
-        #endregion
+
+        /// <summary>
+        /// Получение предпочтений пользователя для рекомендаций
+        /// </summary>
+        private async Task<UserPreferences> GetUserPreferences(int userId)
+        {
+            var preferences = new UserPreferences();
+
+            // Получаем все книги в прогрессе
+            var readingProgress = await _context.ReadingProgress
+                .Include(rp => rp.Book)
+                .Where(rp => rp.UserId == userId)
+                .ToListAsync();
+
+            // Прочитанные книги
+            preferences.FinishedBooks = readingProgress
+                .Where(rp => rp.Status == "Прочитано")
+                .Select(rp => rp.Book)
+                .ToList();
+
+            // Текущее чтение
+            preferences.CurrentlyReading = readingProgress
+                .Where(rp => rp.Status == "Читаю")
+                .Select(rp => rp.Book)
+                .ToList();
+
+            // Книги в планах
+            preferences.WantToRead = readingProgress
+                .Where(rp => rp.Status == "Хочу прочитать")
+                .Select(rp => rp.Book)
+                .ToList();
+
+            // Избранное
+            preferences.FavoriteBooks = await _context.Favorites
+                .Include(f => f.Book)
+                .Where(f => f.UserId == userId)
+                .Select(f => f.Book)
+                .ToListAsync();
+
+            // Анализируем любимые жанры
+            preferences.TopGenres = preferences.FinishedBooks
+                .Concat(preferences.FavoriteBooks)
+                .Where(b => b != null && !string.IsNullOrEmpty(b.Genre))
+                .GroupBy(b => b.Genre)
+                .OrderByDescending(g => g.Count())
+                .Select(g => g.Key)
+                .Take(3)
+                .ToList();
+
+            // Любимые авторы
+            preferences.TopAuthors = preferences.FinishedBooks
+                .Concat(preferences.FavoriteBooks)
+                .Where(b => b != null && !string.IsNullOrEmpty(b.Author))
+                .GroupBy(b => b.Author)
+                .OrderByDescending(g => g.Count())
+                .Select(g => g.Key)
+                .Take(3)
+                .ToList();
+
+            return preferences;
+        }
+
+        /// <summary>
+        /// Формирование промпта для автоподбора
+        /// </summary>
+        private string BuildAutoRecommendationPrompt(UserPreferences prefs)
+        {
+            var sb = new StringBuilder();
+
+            sb.AppendLine("На основе моих предпочтений порекомендуй мне 3 книги для чтения.");
+            sb.AppendLine();
+
+            if (prefs.FinishedBooks.Any())
+            {
+                sb.AppendLine("Книги, которые мне понравились (прочитаны):");
+                foreach (var book in prefs.FinishedBooks.Take(3))
+                {
+                    sb.AppendLine($"  • {book.Title} - {book.Author}");
+                }
+                sb.AppendLine();
+            }
+
+            if (prefs.FavoriteBooks.Any())
+            {
+                sb.AppendLine("Книги в избранном (особо понравились):");
+                foreach (var book in prefs.FavoriteBooks.Take(3))
+                {
+                    sb.AppendLine($"  • {book.Title} - {book.Author}");
+                }
+                sb.AppendLine();
+            }
+
+            if (prefs.CurrentlyReading.Any())
+            {
+                sb.AppendLine("Сейчас читаю (не рекомендую похожее):");
+                foreach (var book in prefs.CurrentlyReading)
+                {
+                    sb.AppendLine($"  • {book.Title} - {book.Author}");
+                }
+                sb.AppendLine();
+            }
+
+            if (prefs.WantToRead.Any())
+            {
+                sb.AppendLine("Книги, которые я уже планирую прочитать (не рекомендовать их):");
+                foreach (var book in prefs.WantToRead.Take(3))
+                {
+                    sb.AppendLine($"  • {book.Title} - {book.Author}");
+                }
+                sb.AppendLine();
+            }
+
+            if (prefs.TopGenres.Any())
+            {
+                sb.AppendLine($"Мои любимые жанры: {string.Join(", ", prefs.TopGenres)}");
+            }
+
+            if (prefs.TopAuthors.Any())
+            {
+                sb.AppendLine($"Мои любимые авторы: {string.Join(", ", prefs.TopAuthors)}");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("Порекомендуй 3 книги, которые мне должны понравиться. Исключи книги, которые я уже читаю или планирую прочитать.");
+            sb.AppendLine("Формат ответа:");
+            sb.AppendLine("1. **Название книги** - Автор");
+            sb.AppendLine("   Краткое описание сюжета");
+            sb.AppendLine("   Почему эта книга подойдет именно мне");
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Определение заголовка рекомендации
+        /// </summary>
+        private string GetRecommendationTitle(UserPreferences prefs)
+        {
+            if (prefs.CurrentlyReading.Any())
+            {
+                return "На основе вашего текущего чтения";
+            }
+            else if (prefs.FinishedBooks.Any())
+            {
+                return "Продолжение ваших книжных предпочтений";
+            }
+            else if (prefs.FavoriteBooks.Any())
+            {
+                return "Похоже на ваше избранное";
+            }
+            else
+            {
+                return "Рекомендации для вас";
+            }
+        }
+
     }
+
+
+    /// <summary>
+    /// Модель для автоматической рекомендации
+    /// </summary>
+    public class AutoRecommendation
+    {
+        public string Title { get; set; }
+        public string Description { get; set; }
+        public string Type { get; set; } 
+        public bool ShowOnLogin { get; set; }
+    }
+
+    /// <summary>
+    /// Предпочтения пользователя
+    /// </summary>
+    public class UserPreferences
+    {
+        public List<Book> FinishedBooks { get; set; } = new();
+        public List<Book> CurrentlyReading { get; set; } = new();
+        public List<Book> WantToRead { get; set; } = new();
+        public List<Book> FavoriteBooks { get; set; } = new();
+        public List<string> TopGenres { get; set; } = new();
+        public List<string> TopAuthors { get; set; } = new();
+    }
+
 }

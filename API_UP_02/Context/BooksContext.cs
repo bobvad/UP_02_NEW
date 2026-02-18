@@ -11,6 +11,7 @@ namespace API_UP_02.Context
         public DbSet<Book> Books { get; set; }
         public DbSet<Favorites> Favorites { get; set; }
         public DbSet<ReadingProgress> ReadingProgress { get; set; }
+        public DbSet<AIInteraction> AIInteractions { get; set; }
         public BooksContext()
         {
             Database.EnsureCreated();
