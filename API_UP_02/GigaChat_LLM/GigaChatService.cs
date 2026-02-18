@@ -1,11 +1,9 @@
-﻿// Services/GigaChatService.cs
-using API_UP_02.Models;
+﻿using API_UP_02.Context;
 using API_UP_02.GigaChat_LLM.For_GigaChat.Models;
+using API_UP_02.GigaChat_LLM.Model_GigaChat;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
 using System.Text;
-using API_UP_02.Context;
-using API_UP_02.GigaChat_LLM.Model_GigaChat;
 
 namespace API_UP_02.Services
 {
@@ -32,13 +30,13 @@ namespace API_UP_02.Services
 4. Почему эта книга подходит под запрос пользователя
 
 Формат ответа:
-📌 По вашему запросу я рекомендую:
+По вашему запросу я рекомендую:
 
-📖 [Название книги] - [Автор]
-📝 [Описание]
-✨ [Почему подходит]
+[Название книги] - [Автор]
+[Описание]
+[Почему подходит]
 
-Старайся давать 2-3 рекомендации на каждый запрос. Будь дружелюбным и используй эмодзи.";
+Старайся давать 2-3 рекомендации на каждый запрос.";
 
         public GigaChatService(BooksContext context, ILogger<GigaChatService> logger)
         {
@@ -46,7 +44,9 @@ namespace API_UP_02.Services
             _logger = logger;
         }
 
-        // Поиск по запросу
+        /// <summary>
+        /// Получение рекомендаций по поисковому запросу
+        /// </summary>
         public async Task<string> GetBookRecommendation(string userRequest, List<Request.Message> conversationHistory = null)
         {
             try
@@ -85,9 +85,6 @@ namespace API_UP_02.Services
                         content = assistantResponse
                     });
 
-                    // Сохраняем в лог
-                    await SaveLogAsync(0, "search", userRequest, assistantResponse);
-
                     return assistantResponse;
                 }
 
@@ -100,7 +97,9 @@ namespace API_UP_02.Services
             }
         }
 
-        // Персональные рекомендации
+        /// <summary>
+        /// Получение персональных рекомендаций на основе истории чтения пользователя
+        /// </summary>
         public async Task<string> GetPersonalizedRecommendation(int userId)
         {
             try
@@ -109,8 +108,7 @@ namespace API_UP_02.Services
 
                 await EnsureTokenAsync();
 
-                var userContext = await GetUserReadingContext(userId);
-                var prompt = BuildPersonalizedPrompt(userContext);
+                var prompt = await BuildPersonalizedPrompt(userId);
 
                 var messages = new List<Request.Message>
                 {
@@ -119,13 +117,9 @@ namespace API_UP_02.Services
                 };
 
                 var response = await GetAnswer(Token, messages);
-                var recommendation = response?.choices?.FirstOrDefault()?.message?.content
+
+                return response?.choices?.FirstOrDefault()?.message?.content
                        ?? "Не удалось подобрать персональные рекомендации";
-
-                // Сохраняем в лог
-                await SaveLogAsync(userId, "personal_recommendation", prompt, recommendation);
-
-                return recommendation;
             }
             catch (Exception ex)
             {
@@ -134,181 +128,9 @@ namespace API_UP_02.Services
             }
         }
 
-        // АВТОМАТИЧЕСКИЕ РЕКОМЕНДАЦИИ (раз в неделю)
-        public async Task<string> GetAutoRecommendation(int userId)
-        {
-            try
-            {
-                // Проверяем, есть ли пользователь
-                var user = await _context.Users.FindAsync(userId);
-                if (user == null)
-                    return "Пользователь не найден";
-
-                // Проверяем, давно ли пользователь получал рекомендации
-                var lastRec = await _context.UserLogs
-                    .Where(x => x.UserId == userId && x.Action == "personal_recommendation")
-                    .OrderByDescending(x => x.CreatedAt)
-                    .FirstOrDefaultAsync();
-
-                // Если прошло больше 7 дней или это первый раз
-                if (lastRec == null || lastRec.CreatedAt < DateTime.Now.AddDays(-7))
-                {
-                    _logger.LogInformation($"Генерируем автоматическую рекомендацию для пользователя {userId}");
-
-                    var recommendation = await GetPersonalizedRecommendation(userId);
-
-                    // Здесь можно добавить отправку email или уведомления
-                    await SendNotification(userId, recommendation);
-
-                    return recommendation;
-                }
-
-                _logger.LogInformation($"Пользователь {userId} уже получал рекомендацию {lastRec.CreatedAt}");
-                return null; // Рекомендация не нужна
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, $"Ошибка авторекомендации для {userId}");
-                return null;
-            }
-        }
-
-        // Отправка уведомления (заглушка)
-        private async Task SendNotification(int userId, string recommendation)
-        {
-            // Здесь можно добавить отправку email, push-уведомления и т.д.
-            _logger.LogInformation($"Уведомление для пользователя {userId} отправлено");
-
-            // Сохраняем в отдельную таблицу уведомлений (если нужно)
-            // await _context.Notifications.AddAsync(new Notification { UserId = userId, Text = recommendation });
-            // await _context.SaveChangesAsync();
-        }
-
-        // Сохранение лога
-        private async Task SaveLogAsync(int userId, string action, string request, string response)
-        {
-            try
-            {
-                var log = new UserLog
-                {
-                    UserId = userId,
-                    Action = action,
-                    Request = request?.Length > 200 ? request.Substring(0, 200) : request,
-                    Response = response?.Length > 500 ? response.Substring(0, 500) : response,
-                    CreatedAt = DateTime.Now
-                };
-
-                await _context.UserLogs.AddAsync(log);
-                await _context.SaveChangesAsync();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка сохранения лога");
-            }
-        }
-
-        // Получение контекста пользователя
-        private async Task<UserReadingContext> GetUserReadingContext(int userId)
-        {
-            var context = new UserReadingContext();
-
-            var readingProgress = await _context.ReadingProgress
-                .Include(rp => rp.Book)
-                .Where(rp => rp.UserId == userId)
-                .ToListAsync();
-
-            var favorites = await _context.Favorites
-                .Include(f => f.Book)
-                .Where(f => f.UserId == userId)
-                .Select(f => f.Book)
-                .ToListAsync();
-
-            foreach (var progress in readingProgress)
-            {
-                var bookInfo = new BookInfo
-                {
-                    Title = progress.Book.Title,
-                    Author = progress.Book.Author,
-                    Genre = progress.Book.Genre
-                };
-
-                switch (progress.Status)
-                {
-                    case "Хочу прочитать":
-                        context.WantToRead.Add(bookInfo);
-                        break;
-                    case "Читаю":
-                        context.CurrentlyReading.Add(bookInfo);
-                        break;
-                    case "Прочитано":
-                        context.FinishedBooks.Add(bookInfo);
-                        break;
-                }
-            }
-
-            foreach (var fav in favorites)
-            {
-                context.FavoriteBooks.Add(new BookInfo
-                {
-                    Title = fav.Title,
-                    Author = fav.Author,
-                    Genre = fav.Genre
-                });
-            }
-
-            return context;
-        }
-
-        // Формирование промпта
-        private string BuildPersonalizedPrompt(UserReadingContext context)
-        {
-            var sb = new StringBuilder();
-
-            sb.AppendLine("Порекомендуй мне книги на основе моей библиотеки:");
-            sb.AppendLine();
-
-            if (context.FinishedBooks.Any())
-            {
-                sb.AppendLine("📚 Книги, которые я уже прочитал:");
-                foreach (var book in context.FinishedBooks.Take(5))
-                {
-                    sb.AppendLine($"  • {book.Title} - {book.Author} ({book.Genre})");
-                }
-            }
-
-            if (context.CurrentlyReading.Any())
-            {
-                sb.AppendLine("\n📖 Сейчас читаю:");
-                foreach (var book in context.CurrentlyReading)
-                {
-                    sb.AppendLine($"  • {book.Title} - {book.Author}");
-                }
-            }
-
-            if (context.WantToRead.Any())
-            {
-                sb.AppendLine("\n⏳ Хочу прочитать:");
-                foreach (var book in context.WantToRead.Take(3))
-                {
-                    sb.AppendLine($"  • {book.Title} - {book.Author}");
-                }
-            }
-
-            if (context.FavoriteBooks.Any())
-            {
-                sb.AppendLine("\n❤️ Мои любимые книги:");
-                foreach (var book in context.FavoriteBooks.Take(3))
-                {
-                    sb.AppendLine($"  • {book.Title} - {book.Author}");
-                }
-            }
-
-            sb.AppendLine("\nПосоветуй 3 книги, которые мне должны понравиться, с учетом моих предпочтений.");
-            sb.AppendLine("Напиши названия, авторов и почему они мне понравятся.");
-
-            return sb.ToString();
-        }
-
+        /// <summary>
+        /// Получение и обновление токена GigaChat
+        /// </summary>
         public async Task<string> GetToken()
         {
             string rqUID = Guid.NewGuid().ToString();
@@ -350,16 +172,9 @@ namespace API_UP_02.Services
             }
         }
 
-        private async Task EnsureTokenAsync()
-        {
-            if (Token == null || TokenExpirationTime <= DateTime.UtcNow)
-            {
-                Token = await GetToken();
-                TokenExpirationTime = DateTime.UtcNow.AddMinutes(30);
-                _logger.LogInformation("Токен обновлен");
-            }
-        }
-
+        /// <summary>
+        /// Отправка запроса к GigaChat API
+        /// </summary>
         public async Task<ResponseMessage> GetAnswer(string token, List<Request.Message> messages)
         {
             string Url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions";
@@ -375,7 +190,7 @@ namespace API_UP_02.Services
                     Request.Headers.Add("Authorization", $"Bearer {token}");
                     Request.Headers.Add("X-Client-ID", ClientId);
 
-                    var DataRequest = new API_UP_02.GigaChat_LLM.For_GigaChat.Models.Request()
+                    var DataRequest = new Request()
                     {
                         model = "GigaChat",
                         stream = false,
@@ -409,20 +224,93 @@ namespace API_UP_02.Services
                 }
             }
         }
-    }
 
-    public class UserReadingContext
-    {
-        public List<BookInfo> WantToRead { get; set; } = new();
-        public List<BookInfo> CurrentlyReading { get; set; } = new();
-        public List<BookInfo> FinishedBooks { get; set; } = new();
-        public List<BookInfo> FavoriteBooks { get; set; } = new();
-    }
+        #region Вспомогательные методы
 
-    public class BookInfo
-    {
-        public string Title { get; set; }
-        public string Author { get; set; }
-        public string Genre { get; set; }
+        private async Task EnsureTokenAsync()
+        {
+            if (Token == null || TokenExpirationTime <= DateTime.UtcNow)
+            {
+                Token = await GetToken();
+                TokenExpirationTime = DateTime.UtcNow.AddMinutes(30);
+                _logger.LogInformation("Токен обновлен");
+            }
+        }
+
+        private async Task<string> BuildPersonalizedPrompt(int userId)
+        {
+            var readingProgress = await _context.ReadingProgress
+                .Include(rp => rp.Book)
+                .Where(rp => rp.UserId == userId)
+                .ToListAsync();
+
+            var favoriteBooks = await _context.Favorites
+                .Include(f => f.Book)
+                .Where(f => f.UserId == userId)
+                .Select(f => f.Book)
+                .ToListAsync();
+
+            var sb = new StringBuilder();
+
+            sb.AppendLine("Порекомендуй мне книги на основе моей библиотеки:");
+            sb.AppendLine();
+
+            var finishedBooks = readingProgress
+                .Where(rp => rp.Status == "Прочитано")
+                .Select(rp => rp.Book)
+                .ToList();
+
+            if (finishedBooks.Any())
+            {
+                sb.AppendLine("Книги, которые я уже прочитал:");
+                foreach (var book in finishedBooks.Take(5))
+                {
+                    sb.AppendLine($"  • {book.Title} - {book.Author} ({book.Genre})");
+                }
+            }
+
+            var currentlyReading = readingProgress
+                .Where(rp => rp.Status == "Читаю")
+                .Select(rp => rp.Book)
+                .ToList();
+
+            if (currentlyReading.Any())
+            {
+                sb.AppendLine("\nСейчас читаю:");
+                foreach (var book in currentlyReading)
+                {
+                    sb.AppendLine($"  • {book.Title} - {book.Author}");
+                }
+            }
+
+            var wantToRead = readingProgress
+                .Where(rp => rp.Status == "Хочу прочитать")
+                .Select(rp => rp.Book)
+                .ToList();
+
+            if (wantToRead.Any())
+            {
+                sb.AppendLine("\nХочу прочитать:");
+                foreach (var book in wantToRead.Take(3))
+                {
+                    sb.AppendLine($"  • {book.Title} - {book.Author}");
+                }
+            }
+
+            if (favoriteBooks.Any())
+            {
+                sb.AppendLine("\nМои любимые книги:");
+                foreach (var book in favoriteBooks.Take(3))
+                {
+                    sb.AppendLine($"  • {book.Title} - {book.Author}");
+                }
+            }
+
+            sb.AppendLine("\nПосоветуй 3 книги, которые мне должны понравиться, с учетом моих предпочтений.");
+            sb.AppendLine("Напиши названия, авторов и почему они мне понравятся.");
+
+            return sb.ToString();
+        }
+        #endregion
     }
 }

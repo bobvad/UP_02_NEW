@@ -5,55 +5,27 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Net;
 using System.Text.RegularExpressions;
+using System.Text;
 
 namespace API_UP_02.Controllers
 {
-    /// <summary>
-    /// Контроллер для парсинга книг с сайтов Litmir.club и Author.Today
-    /// </summary>
     [Route("api/[controller]")]
     [ApiController]
     [ApiExplorerSettings(GroupName = "v3")]
-    public class ParsingBooksController : ControllerBase
+    public class ParsingBooksController : Controller
     {
         private const string LitmirBaseUrl = "https://litmir.club";
-        private const string AuthorTodayBaseUrl = "https://author.today";
         private const string UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 
         private readonly BooksContext _context;
 
-        /// <summary>
-        /// Конструктор контроллера парсинга книг
-        /// </summary>
-        /// <param name="context">Контекст базы данных книг</param>
         public ParsingBooksController(BooksContext context)
         {
             _context = context;
         }
 
         /// <summary>
-        /// Получает книги с одной страницы Litmir.club и сохраняет в базу данных
-        /// </summary>
-        /// <returns>Список спарсенных книг</returns>
-        [HttpGet("books/single-page")]
-        public IActionResult GetBooksFromSinglePage()
-        {
-            try
-            {
-                var books = ParseLitmirBooksFromSinglePage();
-                var validBooks = books.Where(b => b.Id > 0).ToList();
-                SaveBooksToDatabase(validBooks);
-                return Ok(validBooks);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка: {ex.Message}");
-                return Ok(new List<Book>());
-            }
-        }
-
-        /// <summary>
-        /// Получает указанное количество книг с Litmir.club и сохраняет в базу данных
+        /// Получает указанное количество книг с Litmir.club
         /// </summary>
         /// <param name="count">Количество книг для парсинга (по умолчанию 200)</param>
         /// <returns>Список спарсенных книг</returns>
@@ -81,7 +53,7 @@ namespace API_UP_02.Controllers
         }
 
         /// <summary>
-        /// Получает книги с нескольких страниц Litmir.club и сохраняет в базу данных
+        /// Получает книги с нескольких страниц Litmir.club
         /// </summary>
         /// <param name="pages">Количество страниц для парсинга (по умолчанию 5)</param>
         /// <returns>Список спарсенных книг</returns>
@@ -100,174 +72,6 @@ namespace API_UP_02.Controllers
                 var validBooks = books.Where(b => b.Id > 0).ToList();
                 SaveBooksToDatabase(validBooks);
                 return Ok(validBooks);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка: {ex.Message}");
-                return Ok(new List<Book>());
-            }
-        }
-
-        /// <summary>
-        /// Получает книги с сайта Author.Today и сохраняет в базу данных
-        /// </summary>
-        /// <param name="count">Количество книг для парсинга (по умолчанию 50)</param>
-        /// <returns>Список спарсенных книг</returns>
-        [HttpGet("authortoday/books")]
-        public async Task<IActionResult> GetAuthorTodayBooks([FromQuery] int count = 50)
-        {
-            try
-            {
-                var books = await ParseAuthorTodayBooksAsync(count);
-
-                foreach (var book in books.Where(b => !string.IsNullOrEmpty(b.ReadUrl)))
-                {
-                    var bookId = ExtractAuthorTodayId(book.ReadUrl);
-                    if (!string.IsNullOrEmpty(bookId))
-                    {
-                        book.Content = await ParseAuthorTodayBookContentAsync(bookId);
-                    }
-                }
-
-                var validBooks = books.Where(b => !string.IsNullOrEmpty(b.Title)).ToList();
-
-                if (validBooks.Any())
-                {
-                    SaveBooksToDatabase(validBooks);
-                    return Ok(validBooks);
-                }
-
-                return Ok(new List<Book>());
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка: {ex.Message}");
-                return Ok(new List<Book>());
-            }
-        }
-
-        /// <summary>
-        /// Получает текст книги с Author.Today по ID
-        /// </summary>
-        /// <param name="bookId">ID книги на Author.Today</param>
-        /// <returns>Текст книги</returns>
-        [HttpGet("authortoday/book/{bookId}/content")]
-        public async Task<IActionResult> GetAuthorTodayBookContent(string bookId)
-        {
-            try
-            {
-                if (string.IsNullOrEmpty(bookId))
-                    return BadRequest("Не указан ID книги");
-
-                var content = await ParseAuthorTodayBookContentAsync(bookId);
-
-                var book = await _context.Books.FirstOrDefaultAsync(b => b.ReadUrl.Contains(bookId));
-                if (book != null)
-                {
-                    book.Content = TruncateString(content, 5000);
-                    await _context.SaveChangesAsync();
-                }
-
-                return Ok(new { BookId = bookId, Content = content });
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка: {ex.Message}");
-                return Ok(new { Error = ex.Message, Content = "" });
-            }
-        }
-
-        /// <summary>
-        /// Диагностика Author.Today - проверяет, что возвращает сайт
-        /// </summary>
-        /// <returns>Результаты диагностики</returns>
-        [HttpGet("authortoday/debug")]
-        public async Task<IActionResult> DebugAuthorToday()
-        {
-            var result = new Dictionary<string, object>();
-
-            try
-            {
-                using (var handler = new HttpClientHandler())
-                {
-                    handler.UseCookies = true;
-                    handler.CookieContainer = new CookieContainer();
-                    handler.AllowAutoRedirect = true;
-                    handler.AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate;
-
-                    using (var client = new HttpClient(handler))
-                    {
-                        var userAgents = new[]
-                        {
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0"
-                        };
-
-                        var url = "https://author.today/work/popular";
-
-                        foreach (var ua in userAgents)
-                        {
-                            client.DefaultRequestHeaders.Clear();
-                            client.DefaultRequestHeaders.Add("User-Agent", ua);
-                            client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
-                            client.DefaultRequestHeaders.Add("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7");
-                            client.DefaultRequestHeaders.Add("Referer", "https://author.today/");
-
-                            var response = await client.GetAsync(url);
-                            var content = await response.Content.ReadAsStringAsync();
-
-                            result[$"UA_{ua.Substring(0, 30)}..."] = new
-                            {
-                                StatusCode = (int)response.StatusCode,
-                                ContentLength = content.Length,
-                                ContentPreview = content.Length > 500 ? content.Substring(0, 500) + "..." : content,
-                                HasBooks = content.Contains("book") || content.Contains("книг") || content.Contains("Work")
-                            };
-                        }
-                    }
-                }
-
-                return Ok(result);
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(new { Error = ex.Message });
-            }
-        }
-
-        /// <summary>
-        /// Получает книги со всех источников (Litmir.club и Author.Today) и сохраняет в базу данных
-        /// </summary>
-        /// <param name="count">Общее количество книг для парсинга (по умолчанию 100)</param>
-        /// <returns>Список спарсенных книг</returns>
-        [HttpGet("all/books")]
-        public async Task<IActionResult> GetAllBooks([FromQuery] int count = 100)
-        {
-            try
-            {
-                var allBooks = new List<Book>();
-
-                var litmirBooks = ParseManyLitmirBooks(count / 2);
-                foreach (var book in litmirBooks.Where(b => b.Id > 0))
-                {
-                    book.Content = ParseLitmirBookContent(book.ReadUrl);
-                }
-                allBooks.AddRange(litmirBooks.Where(b => b.Id > 0));
-
-                var authorTodayBooks = await ParseAuthorTodayBooksAsync(count / 2);
-
-                foreach (var book in authorTodayBooks.Where(b => !string.IsNullOrEmpty(b.ReadUrl)))
-                {
-                    var bookId = ExtractAuthorTodayId(book.ReadUrl);
-                    if (!string.IsNullOrEmpty(bookId))
-                    {
-                        book.Content = await ParseAuthorTodayBookContentAsync(bookId);
-                    }
-                }
-                allBooks.AddRange(authorTodayBooks.Where(b => !string.IsNullOrEmpty(b.Title)));
-
-                SaveBooksToDatabase(allBooks);
-                return Ok(allBooks);
             }
             catch (Exception ex)
             {
@@ -347,7 +151,7 @@ namespace API_UP_02.Controllers
                 var book = _context.Books.Find(bookId);
                 if (book != null)
                 {
-                    book.Content = TruncateString(content, 5000);
+                    book.Content = content;
                     _context.SaveChanges();
                 }
 
@@ -508,9 +312,314 @@ namespace API_UP_02.Controllers
         }
 
         /// <summary>
-        /// Сохраняет список книг в базу данных
+        /// Парсит указанное количество книг с сайта Readli.net
         /// </summary>
-        /// <param name="books">Список книг для сохранения</param>
+        /// <param name="count">Количество книг для парсинга (по умолчанию 100)</param>
+        /// <param name="loadContent">Загружать ли текст книги (по умолчанию true)</param>
+        /// <returns>Список спарсенных книг</returns>
+        [HttpGet("readli/books")]
+        public async Task<IActionResult> GetReadliBooks([FromQuery] int count = 100, [FromQuery] bool loadContent = true)
+        {
+            try
+            {
+                var books = new List<Book>();
+                var web = CreateHtmlWeb();
+                web.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+                web.OverrideEncoding = Encoding.UTF8;
+
+                int booksParsed = 0;
+
+                var urlsToTry = new List<string>
+                {
+                    "https://readli.net/books/",
+                    "https://readli.net/popular/",
+                    "https://readli.net/last/",
+                    "https://readli.net/genre/fantastika/",
+                    "https://readli.net/genre/fentezi/",
+                    "https://readli.net/genre/detektiv/",
+                    "https://readli.net/genre/lyubovnye-romany/",
+                    "https://readli.net/genre/priklyucheniya/",
+                    "https://readli.net/genre/triller/",
+                    "https://readli.net/genre/uzhasy/",
+                };
+
+                foreach (var baseUrl in urlsToTry)
+                {
+                    if (booksParsed >= count) break;
+
+                    for (int page = 1; page <= 5; page++)
+                    {
+                        if (booksParsed >= count) break;
+
+                        string pageUrl = page == 1 ? baseUrl : baseUrl.TrimEnd('/') + $"/page/{page}/";
+
+                        try
+                        {
+                            Console.WriteLine($"Загрузка страницы: {pageUrl}");
+                            var doc = web.Load(pageUrl);
+
+                            var bookBlocks = doc.DocumentNode.SelectNodes("//div[contains(@class, 'book-item')]") ??
+                                           doc.DocumentNode.SelectNodes("//article[contains(@class, 'book')]") ??
+                                           doc.DocumentNode.SelectNodes("//div[contains(@class, 'post-card')]") ??
+                                           doc.DocumentNode.SelectNodes("//div[contains(@class, 'book-card')]") ??
+                                           doc.DocumentNode.SelectNodes("//div[contains(@class, 'book_row')]");
+
+                            if (bookBlocks == null || bookBlocks.Count == 0)
+                            {
+                                Console.WriteLine("Блоки не найдены, ищем прямые ссылки...");
+                                var bookLinks = doc.DocumentNode.SelectNodes("//a[contains(@href, '/book/')]");
+
+                                if (bookLinks != null && bookLinks.Count > 0)
+                                {
+                                    var processedUrls = new HashSet<string>();
+
+                                    foreach (var link in bookLinks)
+                                    {
+                                        if (booksParsed >= count) break;
+
+                                        string href = link.GetAttributeValue("href", "");
+                                        if (string.IsNullOrEmpty(href) || !href.Contains("/book/")) continue;
+
+                                        string fullUrl = BuildFullUrl(href, "https://readli.net");
+                                        if (processedUrls.Contains(fullUrl)) continue;
+                                        processedUrls.Add(fullUrl);
+
+                                        string title = WebUtility.HtmlDecode(link.InnerText.Trim());
+                                        if (string.IsNullOrEmpty(title) || title.Length < 3) continue;
+
+                                        var book = new Book
+                                        {
+                                            Title = title,
+                                            BookUrl = fullUrl,
+                                            Language = "Русский"
+                                        };
+
+                                        book.Id = ExtractReadliBookId(fullUrl);
+
+                                        if (book.Id > 0)
+                                        {
+                                            book.ReadUrl = $"https://readli.net/chitat-online/?b={book.Id}";
+
+                                            await EnrichReadliBookDetails(book, web);
+
+                                            if (loadContent)
+                                            {
+                                                book.Content = await ParseReadliBookContentAsync(book.Id, web);
+                                            }
+
+                                            books.Add(book);
+                                            booksParsed++;
+                                            Console.WriteLine($"Добавлена книга {booksParsed}: {book.Title}, автор: {book.Author}, жанр: {book.Genre}");
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
+
+                            Console.WriteLine($"Найдено блоков: {bookBlocks.Count}");
+
+                            foreach (var block in bookBlocks)
+                            {
+                                if (booksParsed >= count) break;
+
+                                try
+                                {
+                                    var book = new Book { Language = "Русский" };
+
+                                    var titleLink = block.SelectSingleNode(".//a[contains(@href, '/book/')]") ??
+                                                   block.SelectSingleNode(".//h2/a | .//h3/a | .//h4/a");
+
+                                    if (titleLink == null) continue;
+
+                                    book.Title = WebUtility.HtmlDecode(titleLink.InnerText.Trim());
+                                    if (string.IsNullOrEmpty(book.Title) || book.Title.Length < 2) continue;
+
+                                    string href = titleLink.GetAttributeValue("href", "");
+                                    book.BookUrl = BuildFullUrl(href, "https://readli.net");
+                                    book.Id = ExtractReadliBookId(book.BookUrl);
+
+                                    if (book.Id == 0) continue;
+
+                                    book.ReadUrl = $"https://readli.net/chitat-online/?b={book.Id}";
+
+                                    var authorSelectors = new[]
+                                    {
+                                        ".//a[contains(@href, '/author/')]",
+                                        ".//span[contains(@class, 'author')]/a",
+                                        ".//div[contains(@class, 'author')]/a",
+                                        ".//span[@class='author']",
+                                        ".//div[@class='author']"
+                                    };
+
+                                    foreach (var selector in authorSelectors)
+                                    {
+                                        var authorNode = block.SelectSingleNode(selector);
+                                        if (authorNode != null)
+                                        {
+                                            book.Author = WebUtility.HtmlDecode(authorNode.InnerText.Trim());
+                                            break;
+                                        }
+                                    }
+
+                                    var genreSelectors = new[]
+                                    {
+                                        ".//a[contains(@href, '/genre/')]",
+                                        ".//span[contains(@class, 'genre')]/a",
+                                        ".//div[contains(@class, 'genre')]/a"
+                                    };
+
+                                    var genres = new List<string>();
+                                    foreach (var selector in genreSelectors)
+                                    {
+                                        var genreNodes = block.SelectNodes(selector);
+                                        if (genreNodes != null)
+                                        {
+                                            foreach (var genreNode in genreNodes)
+                                            {
+                                                var genre = WebUtility.HtmlDecode(genreNode.InnerText.Trim());
+                                                if (!string.IsNullOrEmpty(genre) && !genres.Contains(genre))
+                                                    genres.Add(genre);
+                                            }
+                                        }
+                                    }
+
+                                    book.Genre = genres.Any() ? string.Join(", ", genres) : "Не указан";
+
+                                    var descSelectors = new[]
+                                    {
+                                        ".//div[contains(@class, 'desc')]",
+                                        ".//div[contains(@class, 'description')]",
+                                        ".//div[contains(@class, 'annotation')]",
+                                        ".//p[contains(@class, 'desc')]"
+                                    };
+
+                                    foreach (var selector in descSelectors)
+                                    {
+                                        var descBlock = block.SelectSingleNode(selector);
+                                        if (descBlock != null)
+                                        {
+                                            book.Description = WebUtility.HtmlDecode(Regex.Replace(descBlock.InnerText.Trim(), @"\s+", " "));
+                                            if (book.Description.Length > 500)
+                                                book.Description = book.Description.Substring(0, 500) + "...";
+                                            break;
+                                        }
+                                    }
+
+                                    if (string.IsNullOrEmpty(book.Description))
+                                        book.Description = "Описание отсутствует";
+
+                                    var imgNode = block.SelectSingleNode(".//img");
+                                    if (imgNode != null)
+                                    {
+                                        string imgUrl = imgNode.GetAttributeValue("src", "") ??
+                                                       imgNode.GetAttributeValue("data-src", "") ??
+                                                       imgNode.GetAttributeValue("data-original", "");
+
+                                        if (!string.IsNullOrEmpty(imgUrl) && !imgUrl.Contains("data:image"))
+                                            book.ImageUrl = BuildFullUrl(imgUrl, "https://readli.net");
+                                    }
+
+                                    if (string.IsNullOrEmpty(book.Author) || book.Author == "Неизвестен" || book.Genre == "Не указан")
+                                    {
+                                        await EnrichReadliBookDetails(book, web);
+                                    }
+
+                                    if (string.IsNullOrEmpty(book.Author)) book.Author = "Неизвестен";
+                                    if (string.IsNullOrEmpty(book.Genre)) book.Genre = "Не указан";
+
+                                    if (loadContent)
+                                    {
+                                        book.Content = await ParseReadliBookContentAsync(book.Id, web);
+                                    }
+
+                                    books.Add(book);
+                                    booksParsed++;
+
+                                    if (booksParsed % 10 == 0)
+                                    {
+                                        Console.WriteLine($"Прогресс: {booksParsed}/{count} книг");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"Ошибка при парсинге блока: {ex.Message}");
+                                }
+                            }
+
+                            await Task.Delay(1000);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Ошибка загрузки страницы {pageUrl}: {ex.Message}");
+                        }
+                    }
+                }
+
+                Console.WriteLine($"Парсинг Readli завершен. Получено книг: {books.Count}");
+
+                if (books.Any())
+                {
+                    SaveBooksToDatabase(books);
+
+                    var withAuthors = books.Count(b => b.Author != "Неизвестен");
+                    var withGenres = books.Count(b => b.Genre != "Не указан");
+                    var withPages = books.Count(b => b.PageCount.HasValue);
+
+                    Console.WriteLine($"Статистика: всего книг {books.Count}, с авторами {withAuthors}, с жанрами {withGenres}, со страницами {withPages}");
+
+                    return Ok(new
+                    {
+                        Message = $"Успешно спарсено {books.Count} книг",
+                        Statistics = new
+                        {
+                            Total = books.Count,
+                            WithAuthors = withAuthors,
+                            WithGenres = withGenres,
+                            WithPages = withPages
+                        },
+                        Books = books
+                    });
+                }
+
+                return Ok(new { Message = "Не удалось найти книги", Books = new List<Book>() });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка при парсинге Readli: {ex.Message}");
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Получает текст книги с Readli.net по ID
+        /// </summary>
+        /// <param name="bookId">ID книги на Readli.net</param>
+        /// <returns>Текст книги</returns>
+        [HttpGet("readli/book/{bookId}/content")]
+        public async Task<IActionResult> GetReadliBookContent(int bookId)
+        {
+            try
+            {
+                var web = CreateHtmlWeb();
+                web.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+                var content = await ParseReadliBookContentAsync(bookId, web);
+
+                var book = await _context.Books.FirstOrDefaultAsync(b => b.Id == bookId || b.ReadUrl.Contains($"b={bookId}"));
+                if (book != null)
+                {
+                    book.Content = content;
+                    await _context.SaveChangesAsync();
+                }
+
+                return Ok(new { BookId = bookId, Content = content });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+
         private void SaveBooksToDatabase(List<Book> books)
         {
             int addedCount = 0;
@@ -552,7 +661,7 @@ namespace API_UP_02.Controllers
                         book.ReadUrl = TruncateString(book.ReadUrl, 500);
                         book.DownloadUrl = TruncateString(book.DownloadUrl, 500);
                         book.Language = TruncateString(book.Language, 50) ?? "Русский";
-                        book.Content = TruncateString(book.Content, 5000);
+                        book.Content = book.Content;
 
                         _context.Books.Add(book);
 
@@ -633,12 +742,6 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Обрезает строку до указанной длины
-        /// </summary>
-        /// <param name="value">Исходная строка</param>
-        /// <param name="maxLength">Максимальная длина</param>
-        /// <returns>Обрезанная строка</returns>
         private string TruncateString(string value, int maxLength)
         {
             if (string.IsNullOrEmpty(value))
@@ -647,62 +750,6 @@ namespace API_UP_02.Controllers
             return value.Length > maxLength ? value.Substring(0, maxLength) : value;
         }
 
-        /// <summary>
-        /// Извлекает ID книги из URL Author.Today
-        /// </summary>
-        /// <param name="url">URL книги</param>
-        /// <returns>ID книги или null</returns>
-        private string ExtractAuthorTodayId(string url)
-        {
-            if (string.IsNullOrEmpty(url)) return null;
-            var match = Regex.Match(url, @"/work/([^/]+)");
-            return match.Success ? match.Groups[1].Value : null;
-        }
-
-        /// <summary>
-        /// Парсит книги с одной страницы Litmir.club
-        /// </summary>
-        /// <returns>Список книг</returns>
-        private List<Book> ParseLitmirBooksFromSinglePage()
-        {
-            var books = new List<Book>();
-            var web = CreateHtmlWeb();
-
-            try
-            {
-                var doc = web.Load(LitmirBaseUrl);
-                var bookBlocks = FindLitmirBookBlocks(doc);
-
-                if (bookBlocks == null || bookBlocks.Count == 0)
-                {
-                    Console.WriteLine("Книги не найдены на странице");
-                    return books;
-                }
-
-                foreach (var block in bookBlocks)
-                {
-                    var book = ParseLitmirBook(block);
-                    if (book != null && !string.IsNullOrEmpty(book.Title) && book.Id > 0)
-                    {
-                        books.Add(book);
-                    }
-                }
-
-                Console.WriteLine($"Спарсено {books.Count} книг с корректным ID");
-                return books;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка: {ex.Message}");
-                return books;
-            }
-        }
-
-        /// <summary>
-        /// Парсит указанное количество книг с Litmir.club
-        /// </summary>
-        /// <param name="targetCount">Целевое количество книг</param>
-        /// <returns>Список книг</returns>
         private List<Book> ParseManyLitmirBooks(int targetCount)
         {
             var allBooks = new List<Book>();
@@ -736,11 +783,6 @@ namespace API_UP_02.Controllers
             return allBooks;
         }
 
-        /// <summary>
-        /// Парсит книги с нескольких страниц Litmir.club
-        /// </summary>
-        /// <param name="pagesCount">Количество страниц</param>
-        /// <returns>Список книг</returns>
         private List<Book> ParseLitmirBooksFromMultiplePages(int pagesCount)
         {
             var allBooks = new List<Book>();
@@ -768,217 +810,6 @@ namespace API_UP_02.Controllers
             return allBooks;
         }
 
-        /// <summary>
-        /// Парсит книги с сайта Author.Today
-        /// </summary>
-        /// <param name="count">Количество книг</param>
-        /// <returns>Список книг</returns>
-        private async Task<List<Book>> ParseAuthorTodayBooksAsync(int count)
-        {
-            var books = new List<Book>();
-
-            try
-            {
-                using (var handler = new HttpClientHandler())
-                {
-                    handler.UseCookies = true;
-                    handler.CookieContainer = new CookieContainer();
-                    handler.AllowAutoRedirect = true;
-                    handler.AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate;
-
-                    using (var client = new HttpClient(handler))
-                    {
-                        client.DefaultRequestHeaders.Clear();
-                        client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-                        client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
-                        client.DefaultRequestHeaders.Add("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7");
-                        client.DefaultRequestHeaders.Add("Accept-Encoding", "gzip, deflate, br");
-                        client.DefaultRequestHeaders.Add("Referer", "https://author.today/");
-                        client.DefaultRequestHeaders.Add("Connection", "keep-alive");
-
-                        var mainResponse = await client.GetAsync("https://author.today/");
-                        if (!mainResponse.IsSuccessStatusCode)
-                        {
-                            Console.WriteLine("Не удалось получить главную страницу Author.Today");
-                            return books;
-                        }
-
-                        await Task.Delay(2000);
-
-                        var response = await client.GetAsync("https://author.today/work/popular");
-                        if (response.IsSuccessStatusCode)
-                        {
-                            var html = await response.Content.ReadAsStringAsync();
-                            var doc = new HtmlDocument();
-                            doc.LoadHtml(html);
-                            books = ParseAuthorTodayFromHtml(doc, count);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка парсинга Author.Today: {ex.Message}");
-            }
-
-            return books;
-        }
-
-        /// <summary>
-        /// Парсит текст книги с Author.Today по ID
-        /// </summary>
-        /// <param name="bookId">ID книги</param>
-        /// <returns>Текст книги</returns>
-        private async Task<string> ParseAuthorTodayBookContentAsync(string bookId)
-        {
-            try
-            {
-                using (var handler = new HttpClientHandler())
-                {
-                    handler.UseCookies = true;
-                    handler.CookieContainer = new CookieContainer();
-                    handler.AllowAutoRedirect = true;
-
-                    using (var client = new HttpClient(handler))
-                    {
-                        client.DefaultRequestHeaders.Clear();
-                        client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-                        client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-                        client.DefaultRequestHeaders.Add("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7");
-                        client.DefaultRequestHeaders.Add("Referer", "https://author.today/");
-
-                        var url = $"{AuthorTodayBaseUrl}/work/{bookId}/read";
-                        var response = await client.GetAsync(url);
-
-                        if (response.IsSuccessStatusCode)
-                        {
-                            var html = await response.Content.ReadAsStringAsync();
-                            var doc = new HtmlDocument();
-                            doc.LoadHtml(html);
-
-                            var contentNode = doc.DocumentNode.SelectSingleNode("//div[contains(@class, 'book-content')]") ??
-                                             doc.DocumentNode.SelectSingleNode("//div[contains(@class, 'chapter-content')]") ??
-                                             doc.DocumentNode.SelectSingleNode("//div[@class='text']") ??
-                                             doc.DocumentNode.SelectSingleNode("//div[contains(@class, 'content')]");
-
-                            if (contentNode != null)
-                            {
-                                RemoveUnwantedElements(contentNode);
-                                return CleanHtmlContent(contentNode.InnerHtml);
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка загрузки текста Author.Today: {ex.Message}");
-            }
-
-            return "Не удалось загрузить текст книги";
-        }
-
-        /// <summary>
-        /// Парсит HTML страницы Author.Today
-        /// </summary>
-        /// <param name="doc">HTML документ</param>
-        /// <param name="count">Количество книг</param>
-        /// <returns>Список книг</returns>
-        private List<Book> ParseAuthorTodayFromHtml(HtmlDocument doc, int count)
-        {
-            var books = new List<Book>();
-
-            try
-            {
-                var selectors = new[]
-                {
-                    "//div[contains(@class, 'book-row')]",
-                    "//div[contains(@class, 'BookRow')]",
-                    "//article[contains(@class, 'book')]",
-                    "//div[contains(@class, 'work-item')]",
-                    "//div[@data-work-id]",
-                    "//a[contains(@href, '/work/')]/parent::div"
-                };
-
-                HtmlNodeCollection nodes = null;
-
-                foreach (var selector in selectors)
-                {
-                    nodes = doc.DocumentNode.SelectNodes(selector);
-                    if (nodes != null && nodes.Count > 0)
-                    {
-                        break;
-                    }
-                }
-
-                if (nodes != null)
-                {
-                    foreach (var node in nodes.Take(count))
-                    {
-                        var book = ParseAuthorTodayBook(node);
-                        if (book != null && !string.IsNullOrEmpty(book.Title))
-                        {
-                            books.Add(book);
-                        }
-                    }
-                }
-
-                if (!books.Any())
-                {
-                    var links = doc.DocumentNode.SelectNodes("//a[contains(@href, '/work/')]");
-                    if (links != null)
-                    {
-                        var processedUrls = new HashSet<string>();
-
-                        foreach (var link in links.Take(count * 2))
-                        {
-                            var href = link.GetAttributeValue("href", "");
-                            if (string.IsNullOrEmpty(href) || !href.Contains("/work/")) continue;
-
-                            var fullUrl = BuildFullUrl(href, AuthorTodayBaseUrl);
-                            if (processedUrls.Contains(fullUrl)) continue;
-
-                            processedUrls.Add(fullUrl);
-
-                            var title = WebUtility.HtmlDecode(link.InnerText.Trim());
-                            if (string.IsNullOrEmpty(title) || title.Length < 3) continue;
-
-                            var idMatch = Regex.Match(fullUrl, @"/work/([^/]+)");
-                            if (idMatch.Success)
-                            {
-                                var book = new Book
-                                {
-                                    Title = title,
-                                    BookUrl = fullUrl,
-                                    ReadUrl = $"{AuthorTodayBaseUrl}/work/{idMatch.Groups[1].Value}/read",
-                                    Author = "Неизвестен",
-                                    Description = "Описание отсутствует",
-                                    Genre = "Жанр не указан",
-                                    Language = "Русский"
-                                };
-
-                                books.Add(book);
-
-                                if (books.Count >= count)
-                                    break;
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка парсинга HTML: {ex.Message}");
-            }
-
-            return books;
-        }
-
-        /// <summary>
-        /// Парсит отдельную книгу с Litmir.club из HTML-узла
-        /// </summary>
-        /// <param name="row">HTML-узел с данными книги</param>
-        /// <returns>Объект книги или null в случае ошибки</returns>
         private Book ParseLitmirBook(HtmlNode row)
         {
             try
@@ -1020,85 +851,6 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Парсит отдельную книгу с Author.Today из HTML-узла
-        /// </summary>
-        /// <param name="node">HTML-узел с данными книги</param>
-        /// <returns>Объект книги или null в случае ошибки</returns>
-        private Book ParseAuthorTodayBook(HtmlNode node)
-        {
-            try
-            {
-                var book = new Book
-                {
-                    Language = "Русский"
-                };
-
-                var titleNode = node.SelectSingleNode(".//a[contains(@class, 'book-title')]") ??
-                               node.SelectSingleNode(".//h2/a") ??
-                               node.SelectSingleNode(".//a[contains(@href, '/work/')]");
-
-                if (titleNode != null)
-                {
-                    book.Title = WebUtility.HtmlDecode(titleNode.InnerText.Trim());
-                    var href = titleNode.GetAttributeValue("href", "");
-                    book.BookUrl = BuildFullUrl(href, AuthorTodayBaseUrl);
-
-                    var idMatch = Regex.Match(book.BookUrl, @"/work/([^/]+)");
-                    if (idMatch.Success)
-                    {
-                        var id = idMatch.Groups[1].Value;
-                        book.ReadUrl = $"{AuthorTodayBaseUrl}/work/{id}/read";
-                    }
-                }
-
-                var authorNode = node.SelectSingleNode(".//a[contains(@class, 'author-name')]") ??
-                                node.SelectSingleNode(".//span[contains(@class, 'author')]/a");
-
-                book.Author = authorNode != null
-                    ? WebUtility.HtmlDecode(authorNode.InnerText.Trim())
-                    : "Неизвестен";
-
-                var descNode = node.SelectSingleNode(".//div[contains(@class, 'description')]") ??
-                              node.SelectSingleNode(".//p[contains(@class, 'annotation')]");
-
-                book.Description = descNode != null
-                    ? WebUtility.HtmlDecode(Regex.Replace(descNode.InnerText.Trim(), @"\s+", " "))
-                    : "Описание отсутствует";
-
-                var genreNodes = node.SelectNodes(".//a[contains(@href, '/genre/')]");
-                if (genreNodes != null)
-                {
-                    var genres = genreNodes
-                        .Select(g => WebUtility.HtmlDecode(g.InnerText.Trim()))
-                        .Where(g => !string.IsNullOrEmpty(g))
-                        .ToList();
-                    book.Genre = genres.Any() ? string.Join(", ", genres) : "Жанр не указан";
-                }
-
-                var imgNode = node.SelectSingleNode(".//img[contains(@class, 'cover')]") ??
-                             node.SelectSingleNode(".//img");
-
-                if (imgNode != null)
-                {
-                    var src = imgNode.GetAttributeValue("src", "") ??
-                             imgNode.GetAttributeValue("data-src", "");
-                    book.ImageUrl = BuildFullUrl(src, AuthorTodayBaseUrl);
-                }
-
-                return book;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Находит ссылку на книгу в HTML-узле Litmir.club
-        /// </summary>
-        /// <param name="row">HTML-узел</param>
-        /// <returns>Узел ссылки или null</returns>
         private HtmlNode FindLitmirBookLink(HtmlNode row)
         {
             var selectors = new[]
@@ -1129,11 +881,6 @@ namespace API_UP_02.Controllers
             return null;
         }
 
-        /// <summary>
-        /// Парсит автора книги с Litmir.club
-        /// </summary>
-        /// <param name="row">HTML-узел</param>
-        /// <returns>Имя автора</returns>
         private string ParseLitmirAuthor(HtmlNode row)
         {
             var selectors = new[]
@@ -1153,11 +900,6 @@ namespace API_UP_02.Controllers
             return "Неизвестен";
         }
 
-        /// <summary>
-        /// Парсит URL изображения книги с Litmir.club
-        /// </summary>
-        /// <param name="row">HTML-узел</param>
-        /// <returns>URL изображения</returns>
         private string ParseLitmirImageUrl(HtmlNode row)
         {
             var selectors = new[]
@@ -1184,11 +926,6 @@ namespace API_UP_02.Controllers
             return null;
         }
 
-        /// <summary>
-        /// Парсит описание книги с Litmir.club
-        /// </summary>
-        /// <param name="row">HTML-узел</param>
-        /// <returns>Описание книги</returns>
         private string ParseLitmirDescription(HtmlNode row)
         {
             var descNode = row.SelectSingleNode(".//div[@class='description']");
@@ -1206,11 +943,6 @@ namespace API_UP_02.Controllers
             return WebUtility.HtmlDecode(text);
         }
 
-        /// <summary>
-        /// Парсит жанры книги с Litmir.club
-        /// </summary>
-        /// <param name="row">HTML-узел</param>
-        /// <returns>Строка с жанрами</returns>
         private string ParseLitmirGenres(HtmlNode row)
         {
             try
@@ -1254,11 +986,6 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Парсит количество страниц книги с Litmir.club
-        /// </summary>
-        /// <param name="row">HTML-узел</param>
-        /// <returns>Количество страниц или null</returns>
         private int? ParseLitmirPageCount(HtmlNode row)
         {
             var match = Regex.Match(row.InnerText, @"Страниц:\s*(\d+)");
@@ -1268,11 +995,6 @@ namespace API_UP_02.Controllers
             return null;
         }
 
-        /// <summary>
-        /// Проверяет, завершена ли книга на Litmir.club
-        /// </summary>
-        /// <param name="row">HTML-узел</param>
-        /// <returns>true если книга завершена</returns>
         private bool CheckLitmirIsCompleted(HtmlNode row)
         {
             var text = row.InnerText;
@@ -1281,11 +1003,6 @@ namespace API_UP_02.Controllers
                    text.Contains("Полный текст");
         }
 
-        /// <summary>
-        /// Парсит текст книги с Litmir.club по URL
-        /// </summary>
-        /// <param name="bookUrl">URL книги</param>
-        /// <returns>Текст книги</returns>
         private string ParseLitmirBookContent(string bookUrl)
         {
             var web = CreateHtmlWeb();
@@ -1309,11 +1026,6 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Парсит полную информацию о книге с Litmir.club
-        /// </summary>
-        /// <param name="bookUrl">URL книги</param>
-        /// <returns>Объект книги с полной информацией</returns>
         private Book ParseFullLitmirBookInfo(string bookUrl)
         {
             var web = CreateHtmlWeb();
@@ -1382,11 +1094,6 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Получает навигацию по страницам книги на Litmir.club
-        /// </summary>
-        /// <param name="bookUrl">URL книги</param>
-        /// <returns>Объект с ссылками на предыдущую и следующую страницы</returns>
         private object GetLitmirBookNavigation(string bookUrl)
         {
             var web = CreateHtmlWeb();
@@ -1411,11 +1118,6 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Извлекает ID книги из URL Litmir.club
-        /// </summary>
-        /// <param name="url">URL книги</param>
-        /// <returns>ID книги или 0</returns>
         private int ExtractLitmirBookId(string url)
         {
             if (string.IsNullOrEmpty(url)) return 0;
@@ -1446,11 +1148,6 @@ namespace API_UP_02.Controllers
             return 0;
         }
 
-        /// <summary>
-        /// Находит блоки с книгами на странице Litmir.club
-        /// </summary>
-        /// <param name="doc">HTML-документ</param>
-        /// <returns>Коллекция узлов с книгами</returns>
         private HtmlNodeCollection FindLitmirBookBlocks(HtmlDocument doc)
         {
             return doc.DocumentNode.SelectNodes("//div[@class='book_block']") ??
@@ -1458,11 +1155,6 @@ namespace API_UP_02.Controllers
                    doc.DocumentNode.SelectNodes("//tr[.//span[@itemprop='name']]");
         }
 
-        /// <summary>
-        /// Находит строки с книгами на странице Litmir.club
-        /// </summary>
-        /// <param name="doc">HTML-документ</param>
-        /// <returns>Коллекция узлов с книгами</returns>
         private HtmlNodeCollection FindLitmirBookRows(HtmlDocument doc)
         {
             return doc.DocumentNode.SelectNodes("//table[@class='']//tr") ??
@@ -1471,37 +1163,11 @@ namespace API_UP_02.Controllers
                    doc.DocumentNode.SelectNodes("//div[@class='book_block']");
         }
 
-        /// <summary>
-        /// Создает веб-клиент для парсинга
-        /// </summary>
-        /// <returns>Настроенный HtmlWeb</returns>
         private HtmlWeb CreateHtmlWeb()
         {
             return new HtmlWeb { UserAgent = UserAgent };
         }
 
-        /// <summary>
-        /// Создает веб-клиент для парсинга Author.Today с дополнительными заголовками
-        /// </summary>
-        /// <returns>Настроенный HtmlWeb</returns>
-        private HtmlWeb CreateAuthorTodayWebClient()
-        {
-            var web = new HtmlWeb { UserAgent = UserAgent };
-            web.PreRequest = request =>
-            {
-                request.Headers.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-                request.Headers.Add("Accept-Language", "ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3");
-                return true;
-            };
-            return web;
-        }
-
-        /// <summary>
-        /// Формирует полный URL на основе относительного и базового
-        /// </summary>
-        /// <param name="url">Относительный или абсолютный URL</param>
-        /// <param name="baseUrl">Базовый URL сайта</param>
-        /// <returns>Полный URL</returns>
         private string BuildFullUrl(string url, string baseUrl)
         {
             if (string.IsNullOrEmpty(url)) return url;
@@ -1513,10 +1179,6 @@ namespace API_UP_02.Controllers
             return url;
         }
 
-        /// <summary>
-        /// Удаляет нежелательные элементы из HTML-контейнера
-        /// </summary>
-        /// <param name="container">HTML-контейнер</param>
         private void RemoveUnwantedElements(HtmlNode container)
         {
             var removeSelectors = new[] { ".//script", ".//style", ".//ins", ".//div[contains(@class, 'ad')]" };
@@ -1532,11 +1194,6 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Очищает HTML-контент от тегов и лишних пробелов
-        /// </summary>
-        /// <param name="html">Исходный HTML</param>
-        /// <returns>Очищенный текст</returns>
         private string CleanHtmlContent(string html)
         {
             if (string.IsNullOrEmpty(html)) return "";
@@ -1549,6 +1206,252 @@ namespace API_UP_02.Controllers
             html = Regex.Replace(html, @"\n\s*\n\s*\n", "\n\n");
 
             return html.Trim();
+        }
+
+        private async Task EnrichReadliBookDetails(Book book, HtmlWeb web)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(book.BookUrl)) return;
+
+                Console.WriteLine($"Загрузка деталей для книги: {book.BookUrl}");
+                var doc = web.Load(book.BookUrl);
+
+                var authorSelectors = new[]
+                {
+                    "//a[contains(@href, '/author/')]",
+                    "//span[contains(@class, 'author')]/a",
+                    "//div[contains(@class, 'author')]/a",
+                    "//span[@class='author']",
+                    "//div[@class='author']",
+                    "//p[contains(@class, 'author')]/a",
+                    "//meta[@name='author']/@content",
+                    "//a[@rel='author']"
+                };
+
+                foreach (var selector in authorSelectors)
+                {
+                    if (selector.Contains("@content"))
+                    {
+                        var metaNode = doc.DocumentNode.SelectSingleNode(selector);
+                        if (metaNode != null)
+                        {
+                            book.Author = WebUtility.HtmlDecode(metaNode.GetAttributeValue("content", ""));
+                            if (!string.IsNullOrEmpty(book.Author) && book.Author != "Неизвестен")
+                                break;
+                        }
+                    }
+                    else
+                    {
+                        var authorNode = doc.DocumentNode.SelectSingleNode(selector);
+                        if (authorNode != null)
+                        {
+                            book.Author = WebUtility.HtmlDecode(authorNode.InnerText.Trim());
+                            if (!string.IsNullOrEmpty(book.Author) && book.Author != "Неизвестен")
+                                break;
+                        }
+                    }
+                }
+
+                var genreSelectors = new[]
+                {
+                    "//a[contains(@href, '/genre/')]",
+                    "//span[contains(@class, 'genre')]/a",
+                    "//div[contains(@class, 'genre')]/a",
+                    "//meta[@property='book:genre']/@content",
+                    "//meta[@name='genre']/@content"
+                };
+
+                var genres = new List<string>();
+                foreach (var selector in genreSelectors)
+                {
+                    if (selector.Contains("@content"))
+                    {
+                        var metaNode = doc.DocumentNode.SelectSingleNode(selector);
+                        if (metaNode != null)
+                        {
+                            var genre = metaNode.GetAttributeValue("content", "");
+                            if (!string.IsNullOrEmpty(genre) && !genres.Contains(genre))
+                                genres.Add(genre);
+                        }
+                    }
+                    else
+                    {
+                        var genreNodes = doc.DocumentNode.SelectNodes(selector);
+                        if (genreNodes != null)
+                        {
+                            foreach (var genreNode in genreNodes)
+                            {
+                                var genre = WebUtility.HtmlDecode(genreNode.InnerText.Trim());
+                                if (!string.IsNullOrEmpty(genre) && !genres.Contains(genre))
+                                    genres.Add(genre);
+                            }
+                        }
+                    }
+                }
+
+                if (genres.Any())
+                {
+                    book.Genre = string.Join(", ", genres);
+                }
+
+                var pageSelectors = new[]
+                {
+                    "//span[contains(text(), 'Страниц')]/following-sibling::span",
+                    "//span[contains(text(), 'Страниц')]/following-sibling::text()",
+                    "//div[contains(text(), 'Страниц')]",
+                    "//p[contains(text(), 'страниц')]",
+                    "//li[contains(text(), 'страниц')]",
+                    "//meta[@name='pages']/@content"
+                };
+
+                foreach (var selector in pageSelectors)
+                {
+                    if (selector.Contains("@content"))
+                    {
+                        var metaNode = doc.DocumentNode.SelectSingleNode(selector);
+                        if (metaNode != null)
+                        {
+                            var pagesStr = metaNode.GetAttributeValue("content", "");
+                            if (int.TryParse(pagesStr, out int pages))
+                            {
+                                book.PageCount = pages;
+                                break;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        var pageNode = doc.DocumentNode.SelectSingleNode(selector);
+                        if (pageNode != null)
+                        {
+                            var text = pageNode.InnerText;
+                            var match = Regex.Match(text, @"(\d+)");
+                            if (match.Success && int.TryParse(match.Groups[1].Value, out int pages))
+                            {
+                                book.PageCount = pages;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                var descSelectors = new[]
+                {
+                    "//div[@itemprop='description']",
+                    "//div[contains(@class, 'description')]",
+                    "//div[contains(@class, 'annotation')]",
+                    "//meta[@name='description']/@content",
+                    "//meta[@property='og:description']/@content"
+                };
+
+                foreach (var selector in descSelectors)
+                {
+                    if (selector.Contains("@content"))
+                    {
+                        var metaNode = doc.DocumentNode.SelectSingleNode(selector);
+                        if (metaNode != null)
+                        {
+                            var desc = metaNode.GetAttributeValue("content", "");
+                            if (!string.IsNullOrEmpty(desc))
+                            {
+                                book.Description = WebUtility.HtmlDecode(desc);
+                                break;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        var descNode = doc.DocumentNode.SelectSingleNode(selector);
+                        if (descNode != null)
+                        {
+                            book.Description = WebUtility.HtmlDecode(Regex.Replace(descNode.InnerText.Trim(), @"\s+", " "));
+                            break;
+                        }
+                    }
+                }
+
+                Console.WriteLine($"Детали для книги {book.Title}: автор='{book.Author}', жанр='{book.Genre}', страницы={book.PageCount}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка при обогащении книги {book.Title}: {ex.Message}");
+            }
+        }
+
+        private async Task<string> ParseReadliBookContentAsync(int bookId, HtmlWeb web)
+        {
+            try
+            {
+                string contentUrl = $"https://readli.net/chitat-online/?b={bookId}";
+                var doc = web.Load(contentUrl);
+
+                var contentSelectors = new[]
+                {
+                    "//div[@class='book-content']",
+                    "//div[@class='text']",
+                    "//div[@class='entry-content']",
+                    "//div[contains(@class, 'chapter-content')]",
+                    "//div[@id='booktxt']",
+                    "//div[contains(@class, 'book_text')]",
+                    "//div[contains(@class, 'reader-content')]",
+                    "//div[@class='entry']",
+                    "//article"
+                };
+
+                HtmlNode contentNode = null;
+                foreach (var selector in contentSelectors)
+                {
+                    contentNode = doc.DocumentNode.SelectSingleNode(selector);
+                    if (contentNode != null) break;
+                }
+
+                if (contentNode == null)
+                {
+                    var paragraphs = doc.DocumentNode.SelectNodes("//div[@class='entry']//p | //article//p | //div[@class='text']//p");
+                    if (paragraphs != null && paragraphs.Count > 0)
+                    {
+                        var sb = new StringBuilder();
+                        foreach (var p in paragraphs)
+                        {
+                            var text = WebUtility.HtmlDecode(Regex.Replace(p.InnerText.Trim(), @"\s+", " "));
+                            if (!string.IsNullOrEmpty(text))
+                                sb.AppendLine(text);
+                        }
+                        return sb.ToString();
+                    }
+                    return "Текст книги не найден";
+                }
+
+                RemoveUnwantedElements(contentNode);
+                return CleanHtmlContent(contentNode.InnerHtml);
+            }
+            catch (Exception ex)
+            {
+                return $"Ошибка загрузки текста: {ex.Message}";
+            }
+        }
+
+        private int ExtractReadliBookId(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return 0;
+
+            var patterns = new[]
+            {
+                @"[?&]b=(\d+)",
+                @"/book/(\d+)",
+                @"-(\d+)/$",
+                @"/(\d+)/?$"
+            };
+
+            foreach (var pattern in patterns)
+            {
+                var match = Regex.Match(url, pattern, RegexOptions.IgnoreCase);
+                if (match.Success && int.TryParse(match.Groups[1].Value, out int id))
+                    return id;
+            }
+
+            return 0;
         }
     }
 }
