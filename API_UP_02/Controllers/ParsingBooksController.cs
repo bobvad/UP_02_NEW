@@ -811,45 +811,44 @@ namespace API_UP_02.Controllers
         }
 
         private Book ParseLitmirBook(HtmlNode row)
+{
+    try
+    {
+        var book = new Book { };
+        var linkNode = FindLitmirBookLink(row);
+        if (linkNode == null) return null;
+        
+        book.Title = WebUtility.HtmlDecode(linkNode.InnerText.Trim());
+        var href = linkNode.GetAttributeValue("href", "");
+        book.BookUrl = BuildFullUrl(href, LitmirBaseUrl);
+        book.Id = ExtractLitmirBookId(book.BookUrl);
+        if (book.Id == 0) return null;
+        
+        if (book.Id > 0)
         {
-            try
-            {
-                var book = new Book { };
-
-                var linkNode = FindLitmirBookLink(row);
-                if (linkNode == null) return null;
-
-                book.Title = WebUtility.HtmlDecode(linkNode.InnerText.Trim());
-
-                var href = linkNode.GetAttributeValue("href", "");
-                book.BookUrl = BuildFullUrl(href, LitmirBaseUrl);
-
-                book.Id = ExtractLitmirBookId(book.BookUrl);
-
-                if (book.Id == 0) return null;
-
-                if (book.Id > 0)
-                {
-                    book.ReadUrl = $"{LitmirBaseUrl}/br/?b={book.Id}";
-                    book.DownloadUrl = $"{LitmirBaseUrl}/b/d/{book.Id}/fb2";
-                }
-
-                book.Author = ParseLitmirAuthor(row);
-                book.ImageUrl = ParseLitmirImageUrl(row);
-                book.Description = ParseLitmirDescription(row);
-                book.Genre = ParseLitmirGenres(row);
-                book.Language = "Русский";
-                book.PageCount = ParseLitmirPageCount(row);
-                book.IsCompleted = CheckLitmirIsCompleted(row);
-
-                return book;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка парсинга книги: {ex.Message}");
-                return null;
-            }
+            book.ReadUrl = $"{LitmirBaseUrl}/br/?b={book.Id}";
+            book.DownloadUrl = $"{LitmirBaseUrl}/b/d/{book.Id}/fb2";
         }
+        
+        book.Author = ParseLitmirAuthor(row);
+        book.ImageUrl = ParseLitmirImageUrl(row);
+        book.Description = ParseLitmirDescription(row);
+        book.Genre = ParseLitmirGenres(row);
+        book.Language = "Русский";
+        book.PageCount = ParseLitmirPageCount(row);
+        
+        book.Year = ParseLitmirYear(row);
+        
+        book.IsCompleted = CheckLitmirIsCompleted(row);
+        
+        return book;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Ошибка парсинга книги: {ex.Message}");
+        return null;
+    }
+}
 
         private HtmlNode FindLitmirBookLink(HtmlNode row)
         {
@@ -1431,7 +1430,14 @@ namespace API_UP_02.Controllers
                 return $"Ошибка загрузки текста: {ex.Message}";
             }
         }
-
+        private int? ParseLitmirYear(HtmlNode row)
+        {
+            var text = row.InnerText;
+            var match = Regex.Match(text, @"(?:Год[:\s]*|\()(\d{4})\)");
+            if (match.Success && int.TryParse(match.Groups[1].Value, out int year))
+                return year;
+            return null;
+        }
         private int ExtractReadliBookId(string url)
         {
             if (string.IsNullOrEmpty(url)) return 0;
