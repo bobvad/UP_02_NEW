@@ -24,13 +24,8 @@ namespace API_UP_02.Controllers
             _context = context;
         }
 
-        /// <summary>
-        /// Получает указанное количество книг с Litmir.club
-        /// </summary>
-        /// <param name="count">Количество книг для парсинга (по умолчанию 200)</param>
-        /// <returns>Список спарсенных книг</returns>
         [HttpGet("books/many")]
-        public IActionResult GetManyBooks([FromQuery] int count = 200)
+        public IActionResult GetManyBooks([FromQuery] int count = 20)
         {
             try
             {
@@ -38,7 +33,8 @@ namespace API_UP_02.Controllers
 
                 foreach (var book in books.Where(b => b.Id > 0))
                 {
-                    book.Content = ParseLitmirBookContent(book.ReadUrl);
+                    book.Content = ParseLitmirBookContentFirstPages(book.Id, 5);
+                    Console.WriteLine($"Загружено {book.Content?.Length ?? 0} символов контента для книги {book.Title}");
                 }
 
                 var validBooks = books.Where(b => b.Id > 0).ToList();
@@ -52,13 +48,8 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Получает книги с нескольких страниц Litmir.club
-        /// </summary>
-        /// <param name="pages">Количество страниц для парсинга (по умолчанию 5)</param>
-        /// <returns>Список спарсенных книг</returns>
         [HttpGet("books/pages")]
-        public IActionResult GetBooksFromPages([FromQuery] int pages = 5)
+        public IActionResult GetBooksFromPages([FromQuery] int pages = 2)
         {
             try
             {
@@ -66,7 +57,8 @@ namespace API_UP_02.Controllers
 
                 foreach (var book in books.Where(b => b.Id > 0))
                 {
-                    book.Content = ParseLitmirBookContent(book.ReadUrl);
+                    book.Content = ParseLitmirBookContentFirstPages(book.Id, 5);
+                    Console.WriteLine($"Загружено {book.Content?.Length ?? 0} символов контента для книги {book.Title}");
                 }
 
                 var validBooks = books.Where(b => b.Id > 0).ToList();
@@ -80,11 +72,6 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Получает текст книги с Litmir.club по URL
-        /// </summary>
-        /// <param name="bookUrl">URL книги на Litmir.club</param>
-        /// <returns>Текст книги</returns>
         [HttpGet("book/content")]
         public IActionResult GetBookContent([FromQuery] string bookUrl)
         {
@@ -93,7 +80,8 @@ namespace API_UP_02.Controllers
                 if (string.IsNullOrEmpty(bookUrl))
                     return BadRequest("Не указан URL книги");
 
-                var content = ParseLitmirBookContent(bookUrl);
+                var bookId = ExtractLitmirBookId(bookUrl);
+                var content = ParseLitmirBookContentFirstPages(bookId, 5);
                 return Ok(new { Url = bookUrl, Content = content });
             }
             catch (Exception ex)
@@ -103,11 +91,6 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Получает полную информацию о книге с Litmir.club по URL
-        /// </summary>
-        /// <param name="bookUrl">URL книги на Litmir.club</param>
-        /// <returns>Объект книги с полной информацией</returns>
         [HttpGet("book/full")]
         public IActionResult GetFullBookInfo([FromQuery] string bookUrl)
         {
@@ -132,11 +115,6 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Получает текст книги с Litmir.club по ID
-        /// </summary>
-        /// <param name="bookId">ID книги на Litmir.club</param>
-        /// <returns>Текст книги</returns>
         [HttpGet("book/{bookId}/content")]
         public IActionResult GetBookContentById(int bookId)
         {
@@ -145,8 +123,7 @@ namespace API_UP_02.Controllers
                 if (bookId <= 0)
                     return BadRequest("Некорректный ID книги");
 
-                var bookUrl = $"{LitmirBaseUrl}/br/?b={bookId}";
-                var content = ParseLitmirBookContent(bookUrl);
+                var content = ParseLitmirBookContentFirstPages(bookId, 5);
 
                 var book = _context.Books.Find(bookId);
                 if (book != null)
@@ -164,12 +141,6 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Читает книгу с Litmir.club постранично
-        /// </summary>
-        /// <param name="bookId">ID книги на Litmir.club</param>
-        /// <param name="page">Номер страницы (необязательный)</param>
-        /// <returns>Текст страницы и навигация</returns>
         [HttpGet("book/{bookId}/read")]
         public IActionResult ReadBook(int bookId, [FromQuery] int? page = null)
         {
@@ -178,17 +149,14 @@ namespace API_UP_02.Controllers
                 if (bookId <= 0)
                     return BadRequest("Некорректный ID книги");
 
-                var bookUrl = page.HasValue
-                    ? $"{LitmirBaseUrl}/br/?b={bookId}&p={page.Value}"
-                    : $"{LitmirBaseUrl}/br/?b={bookId}";
-
-                var content = ParseLitmirBookContent(bookUrl);
-                var navigation = GetLitmirBookNavigation(bookUrl);
+                var (content, totalPages) = ParseLitmirBookPage(bookId, page ?? 1);
+                var navigation = GetLitmirBookNavigation(bookId, page ?? 1, totalPages);
 
                 return Ok(new
                 {
                     BookId = bookId,
                     Page = page ?? 1,
+                    TotalPages = totalPages,
                     Navigation = navigation,
                     Content = content
                 });
@@ -200,14 +168,8 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Получает книги по жанру из базы данных или с сайта
-        /// </summary>
-        /// <param name="genre">Название жанра</param>
-        /// <param name="count">Количество книг (по умолчанию 20)</param>
-        /// <returns>Список книг указанного жанра</returns>
         [HttpGet("books/genre/{genre}")]
-        public IActionResult GetBooksByGenre(string genre, [FromQuery] int count = 20)
+        public IActionResult GetBooksByGenre(string genre, [FromQuery] int count = 10)
         {
             try
             {
@@ -236,14 +198,8 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Получает книги по автору из базы данных или с сайта
-        /// </summary>
-        /// <param name="author">Имя автора</param>
-        /// <param name="count">Количество книг (по умолчанию 20)</param>
-        /// <returns>Список книг указанного автора</returns>
         [HttpGet("books/author/{author}")]
-        public IActionResult GetBooksByAuthor(string author, [FromQuery] int count = 20)
+        public IActionResult GetBooksByAuthor(string author, [FromQuery] int count = 10)
         {
             try
             {
@@ -272,10 +228,6 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Получает все книги из базы данных
-        /// </summary>
-        /// <returns>Список книг из БД</returns>
         [HttpGet("database/books")]
         public async Task<IActionResult> GetBooksFromDatabase()
         {
@@ -291,10 +243,6 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Очищает таблицу книг в базе данных
-        /// </summary>
-        /// <returns>Результат операции</returns>
         [HttpDelete("database/clear")]
         public async Task<IActionResult> ClearDatabase()
         {
@@ -311,313 +259,223 @@ namespace API_UP_02.Controllers
             }
         }
 
-        /// <summary>
-        /// Парсит указанное количество книг с сайта Readli.net
-        /// </summary>
-        /// <param name="count">Количество книг для парсинга (по умолчанию 100)</param>
-        /// <param name="loadContent">Загружать ли текст книги (по умолчанию true)</param>
-        /// <returns>Список спарсенных книг</returns>
-        [HttpGet("readli/books")]
-        public async Task<IActionResult> GetReadliBooks([FromQuery] int count = 100, [FromQuery] bool loadContent = true)
+        private string ParseLitmirBookContentFirstPages(int bookId, int pagesToLoad = 5)
         {
+            var web = CreateHtmlWeb();
+            var fullContent = new StringBuilder();
+
             try
             {
-                var books = new List<Book>();
-                var web = CreateHtmlWeb();
-                web.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-                web.OverrideEncoding = Encoding.UTF8;
+                Console.WriteLine($"Начинаем загрузку первых {pagesToLoad} страниц для книги {bookId}");
 
-                int booksParsed = 0;
-
-                var urlsToTry = new List<string>
+                for (int currentPage = 1; currentPage <= pagesToLoad; currentPage++)
                 {
-                    "https://readli.net/books/",
-                    "https://readli.net/popular/",
-                    "https://readli.net/last/",
-                    "https://readli.net/genre/fantastika/",
-                    "https://readli.net/genre/fentezi/",
-                    "https://readli.net/genre/detektiv/",
-                    "https://readli.net/genre/lyubovnye-romany/",
-                    "https://readli.net/genre/priklyucheniya/",
-                    "https://readli.net/genre/triller/",
-                    "https://readli.net/genre/uzhasy/",
-                };
+                    string pageUrl = $"{LitmirBaseUrl}/br/?b={bookId}&p={currentPage}";
 
-                foreach (var baseUrl in urlsToTry)
-                {
-                    if (booksParsed >= count) break;
-
-                    for (int page = 1; page <= 5; page++)
+                    try
                     {
-                        if (booksParsed >= count) break;
+                        Console.WriteLine($"Загрузка страницы {currentPage} для книги {bookId}");
+                        var doc = web.Load(pageUrl);
 
-                        string pageUrl = page == 1 ? baseUrl : baseUrl.TrimEnd('/') + $"/page/{page}/";
+                        var textContainer = doc.DocumentNode.SelectSingleNode("//div[@class='page_text']") ??
+                                           doc.DocumentNode.SelectSingleNode("//div[contains(@class, 'page_text')]") ??
+                                           doc.DocumentNode.SelectSingleNode("//div[@id='book_text']") ??
+                                           doc.DocumentNode.SelectSingleNode("//div[@class='text']");
 
-                        try
+                        if (textContainer == null)
                         {
-                            Console.WriteLine($"Загрузка страницы: {pageUrl}");
-                            var doc = web.Load(pageUrl);
-
-                            var bookBlocks = doc.DocumentNode.SelectNodes("//div[contains(@class, 'book-item')]") ??
-                                           doc.DocumentNode.SelectNodes("//article[contains(@class, 'book')]") ??
-                                           doc.DocumentNode.SelectNodes("//div[contains(@class, 'post-card')]") ??
-                                           doc.DocumentNode.SelectNodes("//div[contains(@class, 'book-card')]") ??
-                                           doc.DocumentNode.SelectNodes("//div[contains(@class, 'book_row')]");
-
-                            if (bookBlocks == null || bookBlocks.Count == 0)
-                            {
-                                Console.WriteLine("Блоки не найдены, ищем прямые ссылки...");
-                                var bookLinks = doc.DocumentNode.SelectNodes("//a[contains(@href, '/book/')]");
-
-                                if (bookLinks != null && bookLinks.Count > 0)
-                                {
-                                    var processedUrls = new HashSet<string>();
-
-                                    foreach (var link in bookLinks)
-                                    {
-                                        if (booksParsed >= count) break;
-
-                                        string href = link.GetAttributeValue("href", "");
-                                        if (string.IsNullOrEmpty(href) || !href.Contains("/book/")) continue;
-
-                                        string fullUrl = BuildFullUrl(href, "https://readli.net");
-                                        if (processedUrls.Contains(fullUrl)) continue;
-                                        processedUrls.Add(fullUrl);
-
-                                        string title = WebUtility.HtmlDecode(link.InnerText.Trim());
-                                        if (string.IsNullOrEmpty(title) || title.Length < 3) continue;
-
-                                        var book = new Book
-                                        {
-                                            Title = title,
-                                            BookUrl = fullUrl,
-                                            Language = "Русский"
-                                        };
-
-                                        book.Id = ExtractReadliBookId(fullUrl);
-
-                                        if (book.Id > 0)
-                                        {
-                                            book.ReadUrl = $"https://readli.net/chitat-online/?b={book.Id}";
-
-                                            await EnrichReadliBookDetails(book, web);
-
-                                            if (loadContent)
-                                            {
-                                                book.Content = await ParseReadliBookContentAsync(book.Id, web);
-                                            }
-
-                                            books.Add(book);
-                                            booksParsed++;
-                                            Console.WriteLine($"Добавлена книга {booksParsed}: {book.Title}, автор: {book.Author}, жанр: {book.Genre}");
-                                        }
-                                    }
-                                }
-                                continue;
-                            }
-
-                            Console.WriteLine($"Найдено блоков: {bookBlocks.Count}");
-
-                            foreach (var block in bookBlocks)
-                            {
-                                if (booksParsed >= count) break;
-
-                                try
-                                {
-                                    var book = new Book { Language = "Русский" };
-
-                                    var titleLink = block.SelectSingleNode(".//a[contains(@href, '/book/')]") ??
-                                                   block.SelectSingleNode(".//h2/a | .//h3/a | .//h4/a");
-
-                                    if (titleLink == null) continue;
-
-                                    book.Title = WebUtility.HtmlDecode(titleLink.InnerText.Trim());
-                                    if (string.IsNullOrEmpty(book.Title) || book.Title.Length < 2) continue;
-
-                                    string href = titleLink.GetAttributeValue("href", "");
-                                    book.BookUrl = BuildFullUrl(href, "https://readli.net");
-                                    book.Id = ExtractReadliBookId(book.BookUrl);
-
-                                    if (book.Id == 0) continue;
-
-                                    book.ReadUrl = $"https://readli.net/chitat-online/?b={book.Id}";
-
-                                    var authorSelectors = new[]
-                                    {
-                                        ".//a[contains(@href, '/author/')]",
-                                        ".//span[contains(@class, 'author')]/a",
-                                        ".//div[contains(@class, 'author')]/a",
-                                        ".//span[@class='author']",
-                                        ".//div[@class='author']"
-                                    };
-
-                                    foreach (var selector in authorSelectors)
-                                    {
-                                        var authorNode = block.SelectSingleNode(selector);
-                                        if (authorNode != null)
-                                        {
-                                            book.Author = WebUtility.HtmlDecode(authorNode.InnerText.Trim());
-                                            break;
-                                        }
-                                    }
-
-                                    var genreSelectors = new[]
-                                    {
-                                        ".//a[contains(@href, '/genre/')]",
-                                        ".//span[contains(@class, 'genre')]/a",
-                                        ".//div[contains(@class, 'genre')]/a"
-                                    };
-
-                                    var genres = new List<string>();
-                                    foreach (var selector in genreSelectors)
-                                    {
-                                        var genreNodes = block.SelectNodes(selector);
-                                        if (genreNodes != null)
-                                        {
-                                            foreach (var genreNode in genreNodes)
-                                            {
-                                                var genre = WebUtility.HtmlDecode(genreNode.InnerText.Trim());
-                                                if (!string.IsNullOrEmpty(genre) && !genres.Contains(genre))
-                                                    genres.Add(genre);
-                                            }
-                                        }
-                                    }
-
-                                    book.Genre = genres.Any() ? string.Join(", ", genres) : "Не указан";
-
-                                    var descSelectors = new[]
-                                    {
-                                        ".//div[contains(@class, 'desc')]",
-                                        ".//div[contains(@class, 'description')]",
-                                        ".//div[contains(@class, 'annotation')]",
-                                        ".//p[contains(@class, 'desc')]"
-                                    };
-
-                                    foreach (var selector in descSelectors)
-                                    {
-                                        var descBlock = block.SelectSingleNode(selector);
-                                        if (descBlock != null)
-                                        {
-                                            book.Description = WebUtility.HtmlDecode(Regex.Replace(descBlock.InnerText.Trim(), @"\s+", " "));
-                                            if (book.Description.Length > 500)
-                                                book.Description = book.Description.Substring(0, 500) + "...";
-                                            break;
-                                        }
-                                    }
-
-                                    if (string.IsNullOrEmpty(book.Description))
-                                        book.Description = "Описание отсутствует";
-
-                                    var imgNode = block.SelectSingleNode(".//img");
-                                    if (imgNode != null)
-                                    {
-                                        string imgUrl = imgNode.GetAttributeValue("src", "") ??
-                                                       imgNode.GetAttributeValue("data-src", "") ??
-                                                       imgNode.GetAttributeValue("data-original", "");
-
-                                        if (!string.IsNullOrEmpty(imgUrl) && !imgUrl.Contains("data:image"))
-                                            book.ImageUrl = BuildFullUrl(imgUrl, "https://readli.net");
-                                    }
-
-                                    if (string.IsNullOrEmpty(book.Author) || book.Author == "Неизвестен" || book.Genre == "Не указан")
-                                    {
-                                        await EnrichReadliBookDetails(book, web);
-                                    }
-
-                                    if (string.IsNullOrEmpty(book.Author)) book.Author = "Неизвестен";
-                                    if (string.IsNullOrEmpty(book.Genre)) book.Genre = "Не указан";
-
-                                    if (loadContent)
-                                    {
-                                        book.Content = await ParseReadliBookContentAsync(book.Id, web);
-                                    }
-
-                                    books.Add(book);
-                                    booksParsed++;
-
-                                    if (booksParsed % 10 == 0)
-                                    {
-                                        Console.WriteLine($"Прогресс: {booksParsed}/{count} книг");
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    Console.WriteLine($"Ошибка при парсинге блока: {ex.Message}");
-                                }
-                            }
-
-                            await Task.Delay(1000);
+                            Console.WriteLine($"Текст не найден на странице {currentPage}");
+                            if (currentPage == 1)
+                                return "Текст книги не найден";
+                            break;
                         }
-                        catch (Exception ex)
+
+                        RemoveUnwantedElements(textContainer);
+
+                        string pageContent = CleanHtmlContent(textContainer.InnerHtml);
+
+                        if (string.IsNullOrWhiteSpace(pageContent))
                         {
-                            Console.WriteLine($"Ошибка загрузки страницы {pageUrl}: {ex.Message}");
+                            Console.WriteLine($"Пустая страница {currentPage}");
+                            continue;
                         }
+
+                        if (currentPage > 1)
+                        {
+                            fullContent.AppendLine();
+                            fullContent.AppendLine();
+                            fullContent.AppendLine($"=== Страница {currentPage} ===");
+                            fullContent.AppendLine();
+                        }
+
+                        fullContent.Append(pageContent);
+                        Console.WriteLine($"Страница {currentPage} загружена, длина: {pageContent.Length} символов");
+
+                        System.Threading.Thread.Sleep(300);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Ошибка на странице {currentPage}: {ex.Message}");
                     }
                 }
 
-                Console.WriteLine($"Парсинг Readli завершен. Получено книг: {books.Count}");
+                string result = fullContent.ToString();
+                Console.WriteLine($"Всего загружено страниц: {pagesToLoad}, общая длина контента: {result.Length} символов для книги {bookId}");
 
-                if (books.Any())
-                {
-                    SaveBooksToDatabase(books);
-
-                    var withAuthors = books.Count(b => b.Author != "Неизвестен");
-                    var withGenres = books.Count(b => b.Genre != "Не указан");
-                    var withPages = books.Count(b => b.PageCount.HasValue);
-
-                    Console.WriteLine($"Статистика: всего книг {books.Count}, с авторами {withAuthors}, с жанрами {withGenres}, со страницами {withPages}");
-
-                    return Ok(new
-                    {
-                        Message = $"Успешно спарсено {books.Count} книг",
-                        Statistics = new
-                        {
-                            Total = books.Count,
-                            WithAuthors = withAuthors,
-                            WithGenres = withGenres,
-                            WithPages = withPages
-                        },
-                        Books = books
-                    });
-                }
-
-                return Ok(new { Message = "Не удалось найти книги", Books = new List<Book>() });
+                return string.IsNullOrEmpty(result) ? "Контент не найден" : result;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Ошибка при парсинге Readli: {ex.Message}");
-                return StatusCode(500, new { Error = ex.Message });
+                Console.WriteLine($"Ошибка при загрузке книги {bookId}: {ex.Message}");
+                return $"Ошибка загрузки текста: {ex.Message}";
             }
         }
 
-        /// <summary>
-        /// Получает текст книги с Readli.net по ID
-        /// </summary>
-        /// <param name="bookId">ID книги на Readli.net</param>
-        /// <returns>Текст книги</returns>
-        [HttpGet("readli/book/{bookId}/content")]
-        public async Task<IActionResult> GetReadliBookContent(int bookId)
+        private string ParseLitmirBookContentFull(int bookId)
         {
+            var web = CreateHtmlWeb();
+            var fullContent = new StringBuilder();
+            int currentPage = 1;
+            int maxPages = 1000;
+            bool hasMorePages = true;
+
             try
             {
-                var web = CreateHtmlWeb();
-                web.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-                var content = await ParseReadliBookContentAsync(bookId, web);
-
-                var book = await _context.Books.FirstOrDefaultAsync(b => b.Id == bookId || b.ReadUrl.Contains($"b={bookId}"));
-                if (book != null)
+                while (hasMorePages && currentPage <= maxPages)
                 {
-                    book.Content = content;
-                    await _context.SaveChangesAsync();
+                    string pageUrl = $"{LitmirBaseUrl}/br/?b={bookId}&p={currentPage}";
+
+                    try
+                    {
+                        Console.WriteLine($"Загрузка страницы {currentPage} для книги {bookId}");
+                        var doc = web.Load(pageUrl);
+
+                        var textContainer = doc.DocumentNode.SelectSingleNode("//div[@class='page_text']") ??
+                                           doc.DocumentNode.SelectSingleNode("//div[contains(@class, 'page_text')]") ??
+                                           doc.DocumentNode.SelectSingleNode("//div[@id='book_text']") ??
+                                           doc.DocumentNode.SelectSingleNode("//div[@class='text']");
+
+                        if (textContainer == null)
+                        {
+                            Console.WriteLine($"Текст не найден на странице {currentPage}");
+                            if (currentPage == 1)
+                                return "Текст книги не найден";
+                            break;
+                        }
+
+                        RemoveUnwantedElements(textContainer);
+
+                        string pageContent = CleanHtmlContent(textContainer.InnerHtml);
+
+                        if (string.IsNullOrWhiteSpace(pageContent))
+                        {
+                            Console.WriteLine($"Пустая страница {currentPage}");
+                            if (currentPage > 1)
+                                break;
+                        }
+
+                        if (currentPage > 1)
+                        {
+                            fullContent.AppendLine();
+                            fullContent.AppendLine();
+                            fullContent.AppendLine($"=== Страница {currentPage} ===");
+                            fullContent.AppendLine();
+                        }
+
+                        fullContent.Append(pageContent);
+
+                        var nextPageLink = doc.DocumentNode.SelectSingleNode("//a[contains(text(), 'Следующая') or contains(text(), '→')]");
+                        if (nextPageLink == null)
+                        {
+                            hasMorePages = false;
+                            Console.WriteLine($"Достигнут конец книги на странице {currentPage}");
+                        }
+
+                        currentPage++;
+
+                        if (currentPage % 10 == 0)
+                        {
+                            Console.WriteLine($"Загружено {currentPage - 1} страниц для книги {bookId}");
+                        }
+
+                        System.Threading.Thread.Sleep(300);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Ошибка на странице {currentPage}: {ex.Message}");
+                        if (currentPage > 1)
+                            break;
+                        return $"Ошибка загрузки текста: {ex.Message}";
+                    }
                 }
 
-                return Ok(new { BookId = bookId, Content = content });
+                Console.WriteLine($"Всего загружено страниц: {currentPage - 1} для книги {bookId}");
+                return fullContent.ToString();
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { Error = ex.Message });
+                Console.WriteLine($"Ошибка при загрузке книги {bookId}: {ex.Message}");
+                return $"Ошибка загрузки текста: {ex.Message}";
             }
+        }
+
+        private (string Content, int TotalPages) ParseLitmirBookPage(int bookId, int page)
+        {
+            var web = CreateHtmlWeb();
+
+            try
+            {
+                string pageUrl = $"{LitmirBaseUrl}/br/?b={bookId}&p={page}";
+                var doc = web.Load(pageUrl);
+
+                var textContainer = doc.DocumentNode.SelectSingleNode("//div[@class='page_text']") ??
+                                   doc.DocumentNode.SelectSingleNode("//div[contains(@class, 'page_text')]") ??
+                                   doc.DocumentNode.SelectSingleNode("//div[@id='book_text']") ??
+                                   doc.DocumentNode.SelectSingleNode("//div[@class='text']");
+
+                if (textContainer == null)
+                    return ("Текст не найден", 0);
+
+                RemoveUnwantedElements(textContainer);
+                string content = CleanHtmlContent(textContainer.InnerHtml);
+
+                int totalPages = 1;
+                var lastPageLink = doc.DocumentNode.SelectNodes("//a[contains(@href, '&p=')]");
+                if (lastPageLink != null && lastPageLink.Count > 0)
+                {
+                    var pageNumbers = new List<int>();
+                    foreach (var link in lastPageLink)
+                    {
+                        var href = link.GetAttributeValue("href", "");
+                        var match = Regex.Match(href, @"[?&]p=(\d+)");
+                        if (match.Success && int.TryParse(match.Groups[1].Value, out int p))
+                            pageNumbers.Add(p);
+                    }
+                    if (pageNumbers.Any())
+                        totalPages = pageNumbers.Max();
+                }
+
+                return (content, totalPages);
+            }
+            catch (Exception ex)
+            {
+                return ($"Ошибка загрузки текста: {ex.Message}", 0);
+            }
+        }
+
+        private object GetLitmirBookNavigation(int bookId, int currentPage, int totalPages)
+        {
+            return new
+            {
+                CurrentPage = currentPage,
+                TotalPages = totalPages,
+                HasPrevious = currentPage > 1,
+                HasNext = currentPage < totalPages,
+                PreviousPage = currentPage > 1 ? currentPage - 1 : (int?)null,
+                NextPage = currentPage < totalPages ? currentPage + 1 : (int?)null,
+                FirstPage = 1,
+                LastPage = totalPages
+            };
         }
 
         private void SaveBooksToDatabase(List<Book> books)
@@ -661,7 +519,11 @@ namespace API_UP_02.Controllers
                         book.ReadUrl = TruncateString(book.ReadUrl, 500);
                         book.DownloadUrl = TruncateString(book.DownloadUrl, 500);
                         book.Language = TruncateString(book.Language, 50) ?? "Русский";
-                        book.Content = book.Content;
+
+                        if (!string.IsNullOrEmpty(book.Content) && book.Content.Length > 50000)
+                        {
+                            book.Content = book.Content.Substring(0, 50000) + "... (обрезано)";
+                        }
 
                         _context.Books.Add(book);
 
@@ -694,7 +556,12 @@ namespace API_UP_02.Controllers
 
                         if (!string.IsNullOrEmpty(book.Content) && existingBook.Content != book.Content)
                         {
-                            existingBook.Content = book.Content;
+                            string contentToSave = book.Content;
+                            if (contentToSave.Length > 50000)
+                            {
+                                contentToSave = contentToSave.Substring(0, 50000) + "... (обрезано)";
+                            }
+                            existingBook.Content = contentToSave;
                             hasChanges = true;
                         }
 
@@ -756,7 +623,7 @@ namespace API_UP_02.Controllers
             var web = CreateHtmlWeb();
             var currentPage = 1;
 
-            while (allBooks.Count < targetCount && currentPage <= 10)
+            while (allBooks.Count < targetCount && currentPage <= 3)
             {
                 var pageUrl = currentPage == 1 ? LitmirBaseUrl : $"{LitmirBaseUrl}/knigi?page={currentPage}";
                 var doc = web.Load(pageUrl);
@@ -799,56 +666,60 @@ namespace API_UP_02.Controllers
 
                 foreach (var row in bookRows)
                 {
+                    if (allBooks.Count >= 20)
+                        break;
+
                     var book = ParseLitmirBook(row);
                     if (book != null && !string.IsNullOrEmpty(book.Title) && book.Id > 0)
                     {
                         allBooks.Add(book);
                     }
                 }
+
+                if (allBooks.Count >= 20)
+                    break;
             }
 
             return allBooks;
         }
 
         private Book ParseLitmirBook(HtmlNode row)
-{
-    try
-    {
-        var book = new Book { };
-        var linkNode = FindLitmirBookLink(row);
-        if (linkNode == null) return null;
-        
-        book.Title = WebUtility.HtmlDecode(linkNode.InnerText.Trim());
-        var href = linkNode.GetAttributeValue("href", "");
-        book.BookUrl = BuildFullUrl(href, LitmirBaseUrl);
-        book.Id = ExtractLitmirBookId(book.BookUrl);
-        if (book.Id == 0) return null;
-        
-        if (book.Id > 0)
         {
-            book.ReadUrl = $"{LitmirBaseUrl}/br/?b={book.Id}";
-            book.DownloadUrl = $"{LitmirBaseUrl}/b/d/{book.Id}/fb2";
+            try
+            {
+                var book = new Book { };
+                var linkNode = FindLitmirBookLink(row);
+                if (linkNode == null) return null;
+
+                book.Title = WebUtility.HtmlDecode(linkNode.InnerText.Trim());
+                var href = linkNode.GetAttributeValue("href", "");
+                book.BookUrl = BuildFullUrl(href, LitmirBaseUrl);
+                book.Id = ExtractLitmirBookId(book.BookUrl);
+                if (book.Id == 0) return null;
+
+                if (book.Id > 0)
+                {
+                    book.ReadUrl = $"{LitmirBaseUrl}/br/?b={book.Id}";
+                    book.DownloadUrl = $"{LitmirBaseUrl}/b/d/{book.Id}/fb2";
+                }
+
+                book.Author = ParseLitmirAuthor(row);
+                book.ImageUrl = ParseLitmirImageUrl(row);
+                book.Description = ParseLitmirDescription(row);
+                book.Genre = ParseLitmirGenres(row);
+                book.Language = "Русский";
+                book.PageCount = ParseLitmirPageCount(row);
+                book.Year = ParseLitmirYear(row);
+                book.IsCompleted = CheckLitmirIsCompleted(row);
+
+                return book;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка парсинга книги: {ex.Message}");
+                return null;
+            }
         }
-        
-        book.Author = ParseLitmirAuthor(row);
-        book.ImageUrl = ParseLitmirImageUrl(row);
-        book.Description = ParseLitmirDescription(row);
-        book.Genre = ParseLitmirGenres(row);
-        book.Language = "Русский";
-        book.PageCount = ParseLitmirPageCount(row);
-        
-        book.Year = ParseLitmirYear(row);
-        
-        book.IsCompleted = CheckLitmirIsCompleted(row);
-        
-        return book;
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"Ошибка парсинга книги: {ex.Message}");
-        return null;
-    }
-}
 
         private HtmlNode FindLitmirBookLink(HtmlNode row)
         {
@@ -1002,29 +873,6 @@ namespace API_UP_02.Controllers
                    text.Contains("Полный текст");
         }
 
-        private string ParseLitmirBookContent(string bookUrl)
-        {
-            var web = CreateHtmlWeb();
-
-            try
-            {
-                var doc = web.Load(bookUrl);
-                var textContainer = doc.DocumentNode.SelectSingleNode("//div[@class='page_text']") ??
-                                   doc.DocumentNode.SelectSingleNode("//div[contains(@class, 'page_text')]") ??
-                                   doc.DocumentNode.SelectSingleNode("//div[@id='book_text']");
-
-                if (textContainer == null)
-                    return "Текст книги не найден";
-
-                RemoveUnwantedElements(textContainer);
-                return CleanHtmlContent(textContainer.InnerHtml);
-            }
-            catch (Exception ex)
-            {
-                return $"Ошибка загрузки текста: {ex.Message}";
-            }
-        }
-
         private Book ParseFullLitmirBookInfo(string bookUrl)
         {
             var web = CreateHtmlWeb();
@@ -1083,37 +931,13 @@ namespace API_UP_02.Controllers
                                    pageText.Contains("Завершено") ||
                                    pageText.Contains("Полный текст");
 
-                book.Content = ParseLitmirBookContent(book.ReadUrl);
+                book.Content = ParseLitmirBookContentFirstPages(bookId, 5);
 
                 return book;
             }
             catch (Exception ex)
             {
                 return new Book { Id = 0, Title = "Ошибка", Description = ex.Message, BookUrl = bookUrl };
-            }
-        }
-
-        private object GetLitmirBookNavigation(string bookUrl)
-        {
-            var web = CreateHtmlWeb();
-
-            try
-            {
-                var doc = web.Load(bookUrl);
-
-                return new
-                {
-                    PreviousPage = doc.DocumentNode
-                        .SelectSingleNode("//a[contains(text(), '←') or contains(text(), 'Предыдущая')]")
-                        ?.GetAttributeValue("href", ""),
-                    NextPage = doc.DocumentNode
-                        .SelectSingleNode("//a[contains(text(), '→') or contains(text(), 'Следующая')]")
-                        ?.GetAttributeValue("href", "")
-                };
-            }
-            catch
-            {
-                return null;
             }
         }
 
@@ -1207,229 +1031,6 @@ namespace API_UP_02.Controllers
             return html.Trim();
         }
 
-        private async Task EnrichReadliBookDetails(Book book, HtmlWeb web)
-        {
-            try
-            {
-                if (string.IsNullOrEmpty(book.BookUrl)) return;
-
-                Console.WriteLine($"Загрузка деталей для книги: {book.BookUrl}");
-                var doc = web.Load(book.BookUrl);
-
-                var authorSelectors = new[]
-                {
-                    "//a[contains(@href, '/author/')]",
-                    "//span[contains(@class, 'author')]/a",
-                    "//div[contains(@class, 'author')]/a",
-                    "//span[@class='author']",
-                    "//div[@class='author']",
-                    "//p[contains(@class, 'author')]/a",
-                    "//meta[@name='author']/@content",
-                    "//a[@rel='author']"
-                };
-
-                foreach (var selector in authorSelectors)
-                {
-                    if (selector.Contains("@content"))
-                    {
-                        var metaNode = doc.DocumentNode.SelectSingleNode(selector);
-                        if (metaNode != null)
-                        {
-                            book.Author = WebUtility.HtmlDecode(metaNode.GetAttributeValue("content", ""));
-                            if (!string.IsNullOrEmpty(book.Author) && book.Author != "Неизвестен")
-                                break;
-                        }
-                    }
-                    else
-                    {
-                        var authorNode = doc.DocumentNode.SelectSingleNode(selector);
-                        if (authorNode != null)
-                        {
-                            book.Author = WebUtility.HtmlDecode(authorNode.InnerText.Trim());
-                            if (!string.IsNullOrEmpty(book.Author) && book.Author != "Неизвестен")
-                                break;
-                        }
-                    }
-                }
-
-                var genreSelectors = new[]
-                {
-                    "//a[contains(@href, '/genre/')]",
-                    "//span[contains(@class, 'genre')]/a",
-                    "//div[contains(@class, 'genre')]/a",
-                    "//meta[@property='book:genre']/@content",
-                    "//meta[@name='genre']/@content"
-                };
-
-                var genres = new List<string>();
-                foreach (var selector in genreSelectors)
-                {
-                    if (selector.Contains("@content"))
-                    {
-                        var metaNode = doc.DocumentNode.SelectSingleNode(selector);
-                        if (metaNode != null)
-                        {
-                            var genre = metaNode.GetAttributeValue("content", "");
-                            if (!string.IsNullOrEmpty(genre) && !genres.Contains(genre))
-                                genres.Add(genre);
-                        }
-                    }
-                    else
-                    {
-                        var genreNodes = doc.DocumentNode.SelectNodes(selector);
-                        if (genreNodes != null)
-                        {
-                            foreach (var genreNode in genreNodes)
-                            {
-                                var genre = WebUtility.HtmlDecode(genreNode.InnerText.Trim());
-                                if (!string.IsNullOrEmpty(genre) && !genres.Contains(genre))
-                                    genres.Add(genre);
-                            }
-                        }
-                    }
-                }
-
-                if (genres.Any())
-                {
-                    book.Genre = string.Join(", ", genres);
-                }
-
-                var pageSelectors = new[]
-                {
-                    "//span[contains(text(), 'Страниц')]/following-sibling::span",
-                    "//span[contains(text(), 'Страниц')]/following-sibling::text()",
-                    "//div[contains(text(), 'Страниц')]",
-                    "//p[contains(text(), 'страниц')]",
-                    "//li[contains(text(), 'страниц')]",
-                    "//meta[@name='pages']/@content"
-                };
-
-                foreach (var selector in pageSelectors)
-                {
-                    if (selector.Contains("@content"))
-                    {
-                        var metaNode = doc.DocumentNode.SelectSingleNode(selector);
-                        if (metaNode != null)
-                        {
-                            var pagesStr = metaNode.GetAttributeValue("content", "");
-                            if (int.TryParse(pagesStr, out int pages))
-                            {
-                                book.PageCount = pages;
-                                break;
-                            }
-                        }
-                    }
-                    else
-                    {
-                        var pageNode = doc.DocumentNode.SelectSingleNode(selector);
-                        if (pageNode != null)
-                        {
-                            var text = pageNode.InnerText;
-                            var match = Regex.Match(text, @"(\d+)");
-                            if (match.Success && int.TryParse(match.Groups[1].Value, out int pages))
-                            {
-                                book.PageCount = pages;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                var descSelectors = new[]
-                {
-                    "//div[@itemprop='description']",
-                    "//div[contains(@class, 'description')]",
-                    "//div[contains(@class, 'annotation')]",
-                    "//meta[@name='description']/@content",
-                    "//meta[@property='og:description']/@content"
-                };
-
-                foreach (var selector in descSelectors)
-                {
-                    if (selector.Contains("@content"))
-                    {
-                        var metaNode = doc.DocumentNode.SelectSingleNode(selector);
-                        if (metaNode != null)
-                        {
-                            var desc = metaNode.GetAttributeValue("content", "");
-                            if (!string.IsNullOrEmpty(desc))
-                            {
-                                book.Description = WebUtility.HtmlDecode(desc);
-                                break;
-                            }
-                        }
-                    }
-                    else
-                    {
-                        var descNode = doc.DocumentNode.SelectSingleNode(selector);
-                        if (descNode != null)
-                        {
-                            book.Description = WebUtility.HtmlDecode(Regex.Replace(descNode.InnerText.Trim(), @"\s+", " "));
-                            break;
-                        }
-                    }
-                }
-
-                Console.WriteLine($"Детали для книги {book.Title}: автор='{book.Author}', жанр='{book.Genre}', страницы={book.PageCount}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка при обогащении книги {book.Title}: {ex.Message}");
-            }
-        }
-
-        private async Task<string> ParseReadliBookContentAsync(int bookId, HtmlWeb web)
-        {
-            try
-            {
-                string contentUrl = $"https://readli.net/chitat-online/?b={bookId}";
-                var doc = web.Load(contentUrl);
-
-                var contentSelectors = new[]
-                {
-                    "//div[@class='book-content']",
-                    "//div[@class='text']",
-                    "//div[@class='entry-content']",
-                    "//div[contains(@class, 'chapter-content')]",
-                    "//div[@id='booktxt']",
-                    "//div[contains(@class, 'book_text')]",
-                    "//div[contains(@class, 'reader-content')]",
-                    "//div[@class='entry']",
-                    "//article"
-                };
-
-                HtmlNode contentNode = null;
-                foreach (var selector in contentSelectors)
-                {
-                    contentNode = doc.DocumentNode.SelectSingleNode(selector);
-                    if (contentNode != null) break;
-                }
-
-                if (contentNode == null)
-                {
-                    var paragraphs = doc.DocumentNode.SelectNodes("//div[@class='entry']//p | //article//p | //div[@class='text']//p");
-                    if (paragraphs != null && paragraphs.Count > 0)
-                    {
-                        var sb = new StringBuilder();
-                        foreach (var p in paragraphs)
-                        {
-                            var text = WebUtility.HtmlDecode(Regex.Replace(p.InnerText.Trim(), @"\s+", " "));
-                            if (!string.IsNullOrEmpty(text))
-                                sb.AppendLine(text);
-                        }
-                        return sb.ToString();
-                    }
-                    return "Текст книги не найден";
-                }
-
-                RemoveUnwantedElements(contentNode);
-                return CleanHtmlContent(contentNode.InnerHtml);
-            }
-            catch (Exception ex)
-            {
-                return $"Ошибка загрузки текста: {ex.Message}";
-            }
-        }
         private int? ParseLitmirYear(HtmlNode row)
         {
             var text = row.InnerText;
@@ -1437,27 +1038,6 @@ namespace API_UP_02.Controllers
             if (match.Success && int.TryParse(match.Groups[1].Value, out int year))
                 return year;
             return null;
-        }
-        private int ExtractReadliBookId(string url)
-        {
-            if (string.IsNullOrEmpty(url)) return 0;
-
-            var patterns = new[]
-            {
-                @"[?&]b=(\d+)",
-                @"/book/(\d+)",
-                @"-(\d+)/$",
-                @"/(\d+)/?$"
-            };
-
-            foreach (var pattern in patterns)
-            {
-                var match = Regex.Match(url, pattern, RegexOptions.IgnoreCase);
-                if (match.Success && int.TryParse(match.Groups[1].Value, out int id))
-                    return id;
-            }
-
-            return 0;
         }
     }
 }
